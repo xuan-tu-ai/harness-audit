@@ -1,0 +1,9 @@
+# Candidate harness: the baseline plus one skill. Everything else is identical.
+name: baseline+python-bugfix-skill
+system_prompt_file: system_prompt.md
+allowed_tools: [Read, Edit, Write, Bash, Glob, Grep]
+max_turns: 20
+signatures:
+  # Declared trace feature: the skill tells the agent to check edge cases with `python -c` asserts.
+  skills/python-bugfix/SKILL.md:
+    - {tool: Bash, pattern: "python3? -c"}

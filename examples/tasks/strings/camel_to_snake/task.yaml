@@ -1,0 +1,5 @@
+id: strings/camel_to_snake
+group: strings
+split: report
+prompt: >-
+  Fix the bug in `camel_to_snake.py`: the function `camel_to_snake` must behave exactly as its docstring says. Public tests are in `test_public.py` (run `python test_public.py`); hidden tests also check the cases the docstring describes. Keep the function name and signature.

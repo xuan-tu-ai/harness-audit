@@ -1,0 +1,5 @@
+id: strings/parse_kv
+group: strings
+split: report
+prompt: >-
+  Fix the bug in `parse_kv.py`: the function `parse_kv` must behave exactly as its docstring says. Public tests are in `test_public.py` (run `python test_public.py`); hidden tests also check the cases the docstring describes. Keep the function name and signature.

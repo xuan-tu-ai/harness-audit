@@ -143,6 +143,15 @@ def make_claim(name: str, checks: list[CheckResult]) -> ClaimResult:
     return ClaimResult(claim=name, verdict=v, rubric_grade=g, summary=summary, checks=checks)  # type: ignore[arg-type]
 
 
+def p_note(est: PairedEstimate, alpha: float) -> str:
+    """Explain a non-significant exact test that cannot reach ``alpha`` with so few tasks."""
+    if est.exact_p and est.m > 0:
+        floor = 2.0 / 2**est.m
+        if floor >= alpha:
+            return f" With {est.m} tasks the smallest attainable sign-flip p is {floor:.3f}, so {alpha:g} cannot be reached."
+    return ""
+
+
 def fmt(x: float | None, nd: int = 3) -> str:
     if x is None or (isinstance(x, float) and not np.isfinite(x)):
         return "n/a"

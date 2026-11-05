@@ -1,0 +1,5 @@
+id: legacy/sum_digits
+group: legacy
+split: retention
+prompt: >-
+  Fix the bug in `sum_digits.py`: the function `sum_digits` must behave exactly as its docstring says. Public tests are in `test_public.py` (run `python test_public.py`); hidden tests also check the cases the docstring describes. Keep the function name and signature.

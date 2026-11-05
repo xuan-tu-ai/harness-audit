@@ -10,6 +10,8 @@ The admission gate is the paper's §3.2 rule ``Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0
 
 from __future__ import annotations
 
+import math
+
 from .. import data
 from ..schema import CheckResult, ClaimResult, Status, TaskEntry
 from ..stats import hoeffding_gate
@@ -236,6 +238,16 @@ def _gate_check(ctx: Context, admission: list[TaskEntry], proposal: list[TaskEnt
         "passed": g.passed,
         "seeds_per_task": sorted(set(data.seeds_per_task(r for r in ctx.records if r.split == split).values())),
     }
+    log_term = 2.0 * math.log(sel.K * sel.T / sel.delta)
+    m_any = math.ceil(log_term)  # tasks needed even for the largest possible gain (Δ̂ = −1)
+    metrics["m_needed_at_observed_gain"] = math.ceil(log_term / g.delta_hat**2) if g.delta_hat < 0 else None
+    metrics["m_needed_at_max_gain"] = m_any
+    power = ""
+    if not g.passed:
+        if g.m < m_any:
+            power = f" With m={g.m} the gate cannot pass for any gain (it needs at least {m_any} tasks even at Δ̂ = −1)."
+        if metrics["m_needed_at_observed_gain"]:
+            power += f" At the observed gain it would need about {metrics['m_needed_at_observed_gain']} tasks."
     where = "admission split" if split == "admission" else "report split (no admission split present)"
     fresh_note = ""
     if split == "admission" and proposal:
@@ -262,7 +274,7 @@ def _gate_check(ctx: Context, admission: list[TaskEntry], proposal: list[TaskEnt
         metrics=metrics,
         reason=(
             f"Gate not cleared on the {where}: Δ̂ {g.delta_hat:+.3f} + ε {g.epsilon:.3f} = {g.bound:+.3f} ≥ 0 "
-            f"(m={g.m} independent tasks).{fresh_note}"
+            f"(m={g.m} independent tasks).{power}{fresh_note}"
         )
         if not g.passed
         else f"Gate cleared numerically, but{fresh_note}",

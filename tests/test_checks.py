@@ -245,3 +245,10 @@ def test_system_prompt_carried_by_adherence_signature() -> None:
     ch = run_audit(records, m).check("reached_or_carried")
     assert ch.status == Status.PASS
     assert ch.metrics["per_artifact"]["system_prompt.md"]["carried_rate"] > 0.5
+
+
+def test_per_task_evaluators_are_allowed() -> None:
+    records, m = clean()
+    for r in records:
+        r.evaluator_hash = "sha256:eval-" + r.task_id
+    assert run_audit(records, m).check("same_evaluator").status == Status.PASS

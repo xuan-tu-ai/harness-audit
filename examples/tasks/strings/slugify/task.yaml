@@ -1,0 +1,5 @@
+id: strings/slugify
+group: strings
+split: proposal
+prompt: >-
+  Fix the bug in `slugify.py`: the function `slugify` must behave exactly as its docstring says. Public tests are in `test_public.py` (run `python test_public.py`); hidden tests also check the cases the docstring describes. Keep the function name and signature.

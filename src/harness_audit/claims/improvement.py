@@ -17,7 +17,7 @@ import math
 from .. import data
 from ..schema import CheckResult, ClaimResult, Status
 from ..stats import hoeffding_epsilon
-from .context import PRIMARY_SPLIT, Context, fmt_ci, make_claim
+from .context import PRIMARY_SPLIT, Context, fmt_ci, make_claim, p_note
 
 
 def audit_improvement(ctx: Context) -> ClaimResult:
@@ -196,7 +196,10 @@ def _heldout(ctx: Context) -> CheckResult:
             f"{eh.mean:+.3f} on held-out groups (CI {fmt_ci(eh.ci_low, eh.ci_high)})."
         )
     else:
-        why = f"No gain distinguished from zero on held-out groups: {eh.mean:+.3f} (CI {fmt_ci(eh.ci_low, eh.ci_high)}, {eh.m} tasks)."
+        why = (
+            f"No gain distinguished from zero on held-out groups: {eh.mean:+.3f} "
+            f"(CI {fmt_ci(eh.ci_low, eh.ci_high)}, p = {eh.p_value:.3f}, {eh.m} tasks)." + p_note(eh, ctx.th.alpha)
+        )
     return CheckResult(
         id="heldout_gain",
         title="Gain on held-out groups",

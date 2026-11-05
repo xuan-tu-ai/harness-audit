@@ -1,0 +1,5 @@
+# Baseline harness (pre-update state).
+name: baseline
+system_prompt_file: system_prompt.md
+allowed_tools: [Read, Edit, Write, Bash, Glob, Grep]
+max_turns: 20

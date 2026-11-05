@@ -1,0 +1,23 @@
+# Example experiment: does adding the `python-bugfix` skill (harness_b) improve harness_a?
+experiment: example-python-bugfix-skill
+baseline: harness_a (pre-update state)
+round: 1
+model: claude-haiku-5-5
+adapter: claude_agent_sdk
+tasks_dir: tasks
+harness_a: harness_a
+harness_b: harness_b
+seeds: 3            # replicates per task and arm (the API has no sampling seed; these are independent runs)
+aa: true            # also run an independent A/A replicate arm on the report split
+splits: [admission, report, retention]   # the proposal split is not run: it documents where the skill came from
+per_run_max_usd: 0.10   # SDK max_budget_usd for each run; also the reservation used by the --max-cost guard
+timeout_s: 600
+eval_timeout_s: 60
+selection:
+  K: 1
+  T: 1
+  delta: 0.05
+  admission_data: admission
+  report_uses: 1
+  report_choice: fixed
+  n_compared: 1

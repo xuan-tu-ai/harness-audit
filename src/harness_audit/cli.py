@@ -150,6 +150,7 @@ def run(
     fail_on: FailOn = typer.Option(FailOn.fail, "--fail-on"),
 ) -> None:
     """Run harness A and B on a task set with an adapter, score, cache, and audit."""
+    from .adapters import FatalAdapterError
     from .runner import BudgetError, Runner, load_experiment
 
     try:
@@ -172,7 +173,7 @@ def run(
         )
     try:
         records = runner.execute(plan, max_cost=max_cost, progress=typer.echo)
-    except BudgetError as e:
+    except (BudgetError, FatalAdapterError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(EXIT_INPUT) from e
     man = runner.manifest()

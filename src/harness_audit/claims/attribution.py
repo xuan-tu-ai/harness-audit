@@ -18,7 +18,7 @@ import numpy as np
 
 from .. import data
 from ..schema import CheckResult, ClaimResult, RunRecord, Status
-from .context import PRIMARY_SPLIT, Context, fmt_ci, make_claim
+from .context import PRIMARY_SPLIT, Context, fmt_ci, make_claim, p_note
 
 ENVELOPE_FIELDS = ("output_tokens", "num_turns", "tool_calls")
 REPORTED_FIELDS = ("input_tokens", "cost_usd", "wall_s")
@@ -45,18 +45,24 @@ def audit_attribution(ctx: Context) -> ClaimResult:
         )
         return make_claim("Attribution", checks)
 
-    # Evaluator and model held fixed (hard failures).
-    ev = {arm: sorted(_values([r for r in runs if r.arm == arm], "evaluator_hash")) for arm in (ctx.A, ctx.B)}
-    if len(set(ev[ctx.A]) | set(ev[ctx.B])) > 1:
+    # Evaluator and model held fixed (hard failures). Evaluators may differ between tasks,
+    # but every run of one task, in either arm, must use the same one.
+    per_task: dict[str, set[str]] = defaultdict(set)
+    for r in runs:
+        per_task[r.task_id].add(r.evaluator_hash)
+    mixed = sorted(t for t, hs in per_task.items() if len(hs) > 1)
+    ev = {arm: sorted(_values([r for r in runs if r.arm == arm], "evaluator_hash"))[:5] for arm in (ctx.A, ctx.B)}
+    if mixed:
         checks.append(
             CheckResult(
                 id="same_evaluator",
                 title="Same evaluator",
                 status=Status.FAIL,
                 rubric_status=Status.WARN,
-                reason="The evaluator differs between or within the arms; scores are not comparable.",
+                reason=f"The evaluator differs between runs of the same task ({len(mixed)}/{len(per_task)} tasks); "
+                "scores are not comparable.",
                 criterion="the final evaluator stays outside the candidate's editable surface",
-                metrics={"evaluator_hashes": ev},
+                metrics={"tasks_with_mixed_evaluators": mixed[:20], "evaluator_hashes_sample": ev},
             )
         )
     else:
@@ -65,8 +71,8 @@ def audit_attribution(ctx: Context) -> ClaimResult:
                 id="same_evaluator",
                 title="Same evaluator",
                 status=Status.PASS,
-                reason="Both arms were scored by the same evaluator.",
-                metrics={"evaluator_hashes": ev},
+                reason=f"Each task was scored by one evaluator in both arms ({len(per_task)} tasks).",
+                metrics={"evaluator_hashes_sample": ev},
             )
         )
     models = {arm: sorted(_values([r for r in runs if r.arm == arm], "model")) for arm in (ctx.A, ctx.B)}
@@ -272,7 +278,9 @@ def _margin(ctx: Context) -> CheckResult:
     if est.ci_high < 0 and est.p_value < alpha_k:
         why = f"B is worse than A: Δscore {est.mean:+.3f}, {lvl} CI {ci}, p = {est.p_value:.4f}."
     else:
-        why = f"Margin not distinguished from zero: Δscore {est.mean:+.3f}, {lvl} CI {ci}, p = {est.p_value:.4f}."
+        why = f"Margin not distinguished from zero: Δscore {est.mean:+.3f}, {lvl} CI {ci}, p = {est.p_value:.4f}." + p_note(
+            est, alpha_k
+        )
     return CheckResult(
         id="margin", title="Margin beyond measured variation", status=Status.WARN, criterion=crit, metrics=metrics, reason=why
     )
