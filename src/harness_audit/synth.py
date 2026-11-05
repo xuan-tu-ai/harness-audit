@@ -35,6 +35,7 @@ SCENARIOS: dict[str, str] = {
     "retention_regression": "B regresses on the retention (earlier) tasks.",
     "no_traces": "No traces were collected, so Activation cannot be judged.",
     "oracle_touched": "Some B runs read the hidden tests that score them.",
+    "reached_not_followed": "B invokes the skill but rarely follows its procedure afterwards.",
 }
 
 SKILL = "skills/python-bugfix/SKILL.md"
@@ -131,7 +132,7 @@ def generate(scenario: str = "clean", seed: int = 0, seeds: int = 3) -> tuple[li
 def _run(rng: np.random.Generator, scenario: str, t: _Task, arm: str, s: int) -> RunRecord:
     is_b = arm == "B"
     reached = is_b and scenario != "never_activated" and rng.random() < 0.9
-    carried = reached and rng.random() < 0.9
+    carried = reached and rng.random() < (0.05 if scenario == "reached_not_followed" else 0.9)
     # Probability of passing each hidden test.
     p = t.base
     if is_b:

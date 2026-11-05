@@ -72,7 +72,7 @@ def test_options_isolate_and_enable_skills(tmp_path: Path) -> None:
     assert opts.skills == ["python-bugfix"] and "Skill" in opts.tools and "Skill" in opts.allowed_tools
     assert opts.model == "claude-haiku-5-5" and opts.max_budget_usd == 0.1 and opts.max_turns == 20
     assert opts.system_prompt == req.harness.system_prompt
-    assert list(opts.hooks) == ["PreToolUse"]
+    assert list(opts.hooks) == ["PreToolUse", "PostToolUse", "PostToolUseFailure"]
     req_a = _req(tmp_path / "a", arm="harness_a")
     opts_a = mod.ClaudeAgentSDKAdapter().options(req_a, mod.TraceRecorder(req_a.harness, req_a.workdir))
     assert opts_a.skills == [] and "Skill" not in opts_a.tools
@@ -183,3 +183,35 @@ def test_refuses_when_cli_uses_another_credential(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(sdk, "query", fake_query)
     with pytest.raises(FatalAdapterError, match="apiKeySource"):
         asyncio.run(mod.ClaudeAgentSDKAdapter().run(req))
+
+
+def test_tool_outcomes_from_hooks_and_result_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A call's ok flag comes from PostToolUse / PostToolUseFailure and ToolResultBlock.is_error; failure wins."""
+    req = _req(tmp_path)
+
+    async def fake_query(*, prompt, options):
+        yield sdk.SystemMessage(subtype="init", data={"skills": ["python-bugfix"]})
+        pre = options.hooks["PreToolUse"][0].hooks[0]
+        post = options.hooks["PostToolUse"][0].hooks[0]
+        fail = options.hooks["PostToolUseFailure"][0].hooks[0]
+        for tid, cmd in (("a", "python test_public.py"), ("b", "python -c 'assert 0'"), ("c", "ls"), ("d", "pwd")):
+            await pre({"tool_name": "Bash", "tool_input": {"command": cmd}, "tool_use_id": tid}, tid, None)
+        await post({"tool_name": "Bash", "tool_use_id": "a"}, "a", None)
+        await post({"tool_name": "Bash", "tool_use_id": "b"}, "b", None)  # hook says returned ...
+        yield sdk.UserMessage(content=[sdk.ToolResultBlock(tool_use_id="b", content="AssertionError", is_error=True)])
+        await fail({"tool_name": "Bash", "tool_use_id": "c", "error": "exit 1"}, "c", None)
+        yield sdk.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s",
+            total_cost_usd=0.001,
+            usage={"input_tokens": 1, "output_tokens": 1},
+        )
+
+    monkeypatch.setattr(sdk, "query", fake_query)
+    res = asyncio.run(mod.ClaudeAgentSDKAdapter().run(req))
+    ok = {e.summary: e.ok for e in res.events if e.type == "tool_call"}
+    assert ok == {"python test_public.py": True, "python -c 'assert 0'": False, "ls": False, "pwd": None}

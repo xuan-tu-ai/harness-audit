@@ -19,7 +19,7 @@ EXPECTED: dict[str, tuple[dict[str, Verdict], dict[str, Status]]] = {
     ),
     "never_activated": (
         {"Activation": Verdict.PARTIAL},
-        {"reached_or_carried": Status.WARN, "gain_without_activation": Status.NOTE},
+        {"reached_or_carried": Status.WARN, "gain_without_activation": Status.NOTE, "adherence": Status.NOTE},
     ),
     "double_tokens": ({"Attribution": Verdict.PARTIAL}, {"envelope": Status.WARN}),
     "evaluator_changed": ({"Attribution": Verdict.FAIL}, {"same_evaluator": Status.FAIL}),
@@ -27,6 +27,9 @@ EXPECTED: dict[str, tuple[dict[str, Verdict], dict[str, Status]]] = {
     "retention_regression": ({"Improvement": Verdict.FAIL}, {"retention": Status.FAIL}),
     "no_traces": ({"Activation": Verdict.UNKNOWN}, {"reached_or_carried": Status.SKIP}),
     "oracle_touched": ({"Selection": Verdict.PARTIAL}, {"oracle_integrity": Status.WARN}),
+    # Reached is enough for the rubric's existence test, so Activation stays PASS; the note says the
+    # skill was invoked but not followed (report §6.2.2: loading and adherence are different rates).
+    "reached_not_followed": ({}, {"adherence": Status.NOTE}),
 }
 
 

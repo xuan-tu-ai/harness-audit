@@ -52,12 +52,16 @@ Activation is judged from events, so they decide what harness-audit can conclude
 | `artifact_loaded` | a harness artifact entered the run (a skill was registered, a prompt was set, a tool was mounted) | available |
 | `artifact_reached` | the changed artifact's path executed (the skill was invoked, the tool was called, the changed code ran) | reached |
 | `artifact_carried` | its effect reached a later use (its output entered the next model input, a downstream decision followed it) | carried |
-| `tool_call` | every tool call: `name`, `args_hash`, and an optional short `summary` | — |
+| `tool_call` | every tool call: `name`, `args_hash`, an optional short `summary`, and `ok` (did the call succeed; omit if unknown) | — |
+| `rubric_judgment` | an external judge decided a `check: judge` rubric item: `artifact`, `name` = item id, `ok` = met | carried (adherence) |
 
 Use the artifact's path relative to the harness root (`skills/foo/SKILL.md`) as `artifact`, and its
-content hash as `hash` when you have it. Keep `summary` free of file contents and secrets; harness-audit
-matches the manifest's trace `signatures` against it to derive *carried* (a matching call after the
-artifact was reached).
+content hash as `hash` when you have it. Keep `summary` free of file contents and secrets: it is the
+command for a shell call and the path for a file tool. harness-audit reads the artifact's adherence
+rubric (or its trace `signatures`) against these calls to derive *carried*, counting from the moment the
+artifact was reached. Rubric items that depend on a failure (`on_failure_of`) or on success (`ok: true`)
+need `ok`; without it they stay *n/a* or *unmet*. The Claude adapter fills `ok` from the `PostToolUse`
+and `PostToolUseFailure` hooks and from `ToolResultBlock.is_error`.
 
 Load events alone grade as *available*, which the rubric treats as the weakest evidence. If your framework
 cannot observe execution of the changed path, say so in the report rather than emitting `artifact_reached`

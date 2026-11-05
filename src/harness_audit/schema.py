@@ -7,6 +7,7 @@ The core schema is framework-independent: any agent framework can export
 from __future__ import annotations
 
 import fnmatch
+import re
 from enum import Enum
 from typing import Any, Literal
 
@@ -46,6 +47,8 @@ class Event(_Model):
     name: str | None = None
     args_hash: str | None = None
     summary: str | None = None
+    ok: bool | None = None
+    """For ``tool_call``: whether the call succeeded (None = not recorded). For ``rubric_judgment``: the verdict."""
 
 
 class RunRecord(_Model):
@@ -83,6 +86,68 @@ class Signature(_Model):
     pattern: str
 
 
+class RubricItem(_Model):
+    """One instruction of a skill or prompt, checked against the trajectory (report §6.2.2, adherence).
+
+    A trace item is met by a ``tool_call`` whose tool name fully matches ``tool`` (a regex) and whose
+    summary matches ``pattern``, or by any of ``any_of``; ``ok`` also requires the call's outcome.
+    ``after`` orders it after the first call that met each listed item. ``on_failure_of`` makes it
+    conditional: it applies only in runs where a call matching one of the listed items failed, and is
+    then met only by a matching call after that failure. A ``judge`` item cannot be read from the trace;
+    it is met or unmet only through ``rubric_judgment`` events written by an external judge.
+    """
+
+    id: str
+    text: str | None = Field(None, description="the instruction from the artifact this item checks")
+    check: Literal["trace", "judge"] = "trace"
+    tool: str | None = None
+    pattern: str = ""
+    any_of: list[Signature] = Field(default_factory=list)
+    ok: bool | None = None
+    after: list[str] = Field(default_factory=list)
+    on_failure_of: list[str] = Field(default_factory=list)
+    required: bool = True
+
+    @field_validator("tool", "pattern")
+    @classmethod
+    def _valid_regex(cls, v: str | None) -> str | None:
+        if v:
+            try:
+                re.compile(v)
+            except re.error as e:
+                raise ValueError(f"invalid regex {v!r}: {e}") from e
+        return v
+
+
+def _check_rubric(items: list[RubricItem]) -> list[RubricItem]:
+    ids = [i.id for i in items]
+    dup = sorted({x for x in ids if ids.count(x) > 1})
+    if dup:
+        raise ValueError(f"duplicate rubric item ids: {dup}")
+    known = set(ids)
+    for i in items:
+        bad = [r for r in i.after + i.on_failure_of if r not in known or r == i.id]
+        if bad:
+            raise ValueError(f"rubric item {i.id!r} refers to unknown or itself: {bad}")
+    # `after` must be acyclic.
+    state: dict[str, int] = {}
+    deps = {i.id: i.after for i in items}
+
+    def visit(n: str) -> None:
+        if state.get(n) == 1:
+            raise ValueError(f"rubric `after` has a cycle through {n!r}")
+        if state.get(n) == 2:
+            return
+        state[n] = 1
+        for d in deps[n]:
+            visit(d)
+        state[n] = 2
+
+    for n in deps:
+        visit(n)
+    return items
+
+
 ArtifactKind = Literal["skill", "system_prompt", "file", "tool", "code", "config"]
 
 
@@ -95,6 +160,11 @@ class ChangedArtifact(_Model):
     hash_a: str | None = None
     hash_b: str | None = None
     signatures: list[Signature] = Field(default_factory=list)
+    rubric: list[RubricItem] = Field(
+        default_factory=list,
+        description="instructions drawn from the artifact, checked against each trajectory; carried = every "
+        "required, checkable item met. Without a rubric, `signatures` act as one required item.",
+    )
     applies_to: list[str] | None = Field(
         None,
         description="task ids or task groups (glob patterns) where this update is meant to apply, declared before "
@@ -105,6 +175,19 @@ class ChangedArtifact(_Model):
     def carried_requires_reached(self) -> bool:
         """Interpreted guidance in a system prompt has no 'reached' event of its own."""
         return self.kind not in ("system_prompt", "config")
+
+    @field_validator("rubric")
+    @classmethod
+    def _rubric_ok(cls, v: list[RubricItem]) -> list[RubricItem]:
+        return _check_rubric(v)
+
+    def effective_rubric(self) -> list[RubricItem]:
+        """The declared rubric, or the signatures as a single required item (the pre-rubric behaviour)."""
+        if self.rubric:
+            return self.rubric
+        if self.signatures:
+            return [RubricItem(id="signature", text="declared trace signature", any_of=self.signatures)]
+        return []
 
     @property
     def executable(self) -> bool:

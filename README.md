@@ -64,7 +64,7 @@ about one comparison cannot borrow evidence from another model, benchmark or exp
 | Claim | Question | harness-audit checks |
 |---|---|---|
 | **Selection** | Was the reported number measured, or picked? | Report tasks are disjoint from the tasks that proposed the update and from the admission tasks (by id and content hash); the report split was not used to choose the round or configuration and was not reused; the paper's admission gate `Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0` on fresh tasks, with `m` counted in **tasks**, not seeds; **oracle integrity**: the scorer stayed out of the agent's reach (evaluator unchanged after each run, no traced tool call touching hidden tests). |
-| **Activation** | Did the update operate in the scored runs? | Per changed artifact, the report's three rates (Eq. 11) over the scored B runs where the update applies (`applies_to`, declared in advance): **load** and **reach** over those runs, **carry** over the runs that loaded it (guidance) or reached it (code). A rate with nothing to divide by is shown as undefined with its counts, never as 0. Score difference when the update was activated versus not. |
+| **Activation** | Did the update operate in the scored runs? | Per changed artifact, the report's three rates (Eq. 11) over the scored B runs where the update applies (`applies_to`, declared in advance): **load** and **reach** over those runs, **carry** over the runs that loaded it (guidance) or reached it (code). For a skill or prompt, carried means the trajectory **adhered** to it, read against a rubric of its steps (see [Adherence](#adherence-did-the-agent-follow-the-skill)). A rate with nothing to divide by is shown as undefined with its counts, never as 0. Score difference when the update was activated versus not. |
 | **Attribution** | Did the gain come from the update, not noise, compute or the evaluator? | Same evaluator and model; arms differ only in the declared artifacts; inference envelope (output tokens, turns, tool calls) within a ratio of A; paired bootstrap over tasks and a sign-flip permutation test; Δ compared with an A/A noise band. |
 | **Improvement** | How far does the gain reach? | Task distance between report tasks and update-forming tasks; gain on task groups that did not form the update; no regression on a retention split beyond your threshold. |
 
@@ -92,6 +92,31 @@ conditions only. harness-audit is deliberately stricter in four places, and the 
 - The admission gate and oracle integrity (a control from the report's Table 5) are reported under
   Selection; the rubric does not grade them.
 
+### Adherence: did the agent follow the skill?
+
+Loading a skill is not following it: the companion report cites two agents that load skills at almost the
+same rate (0.961 and 0.957) while following them at 0.350 and 0.757. harness-audit therefore reads
+*carried* for a skill or prompt as adherence to a **rubric drawn from its text**, declared next to the
+harness (`rubrics:` in `harness.yaml`, or `rubric:` on a changed artifact in the manifest):
+
+```yaml
+rubrics:
+  skills/python-bugfix/SKILL.md:
+    - {id: fix, text: "3. Fix the function", tool: "Edit|Write", pattern: '\.py$'}
+    - {id: public_tests, text: "4. Run python test_public.py", tool: Bash, pattern: 'test_public\.py', after: [fix]}
+    - {id: fix_after_failure, text: "5. If a check fails, fix the code", tool: "Edit|Write", on_failure_of: [public_tests]}
+    - {id: list_edge_cases, text: "2. List the edge cases", check: judge, required: false}
+```
+
+Each item is matched against the trace's tool calls (tool name, command or path, and whether the call
+succeeded), in order (`after`) and only from the moment the skill was invoked; `on_failure_of` items apply
+only in runs where a listed check failed. A run *followed* the skill when every required item that could be
+decided was met. The report shows each item's rate in B and, over whole runs, in A, so a procedure the
+agent follows anyway does not count as the update operating (the `adherence` check notes it). Items a
+trace cannot show, such as "think about edge cases", are `check: judge`: they are decided only by
+`rubric_judgment` events from an external judge (`harness_audit.adherence.Judge`); the audit itself never
+calls a model. Declared `signatures` still work as a one-item rubric.
+
 The full mapping from each paper criterion to its check, with the exact status rules, is in
 [PLAN.md](PLAN.md#2-mapping-from-paper-criteria-to-checks).
 
@@ -111,6 +136,7 @@ check fires, that the other checks stay quiet, and that a clean experiment passe
 | `retention_regression` | B regresses on earlier tasks | `retention` | Improvement FAIL |
 | `no_traces` | no traces collected | `reached_or_carried` | Activation UNKNOWN |
 | `oracle_touched` | some B runs read the hidden tests | `oracle_integrity` | Selection PARTIAL |
+| `reached_not_followed` | B invokes the skill but rarely follows it | `adherence` (note) | PASS ×4 (reached is enough for the rubric's existence test) |
 
 ## Audit your own runs (any framework)
 
@@ -212,10 +238,11 @@ harness.
 
 ## Known limitations
 
-- **Carried for interpreted guidance** (skills, system prompts) is approximated by the trace signatures you
-  declare. The report defines it as adherence: the trajectory scored against a rubric drawn from the skill
-  text. A signature is a weaker proxy. Adherence can also appear in A, so the report shows the signature's
-  rate in A next to its rate in B.
+- **Adherence is read from tool calls only.** The rubric is written by hand from the skill text, and trace
+  items see tool names, commands, paths and outcomes, not the model's reasoning. Instructions about
+  reasoning need `check: judge` items and an external judge; no judge ships yet, so they are reported as
+  unjudged and do not decide *carried*. Lin et al. (cited by the report) score adherence with a rubric
+  extracted from the skill text; harness-audit does not reproduce their extraction or scoring.
 - **Oracle integrity is detected, not enforced.** The runner keeps hidden tests out of the workspace and
   re-hashes the evaluator after every run, but an agent with Bash can still reach host paths. Reads are
   caught only if a traced tool call names a protected path. Run untrusted agents in a container.

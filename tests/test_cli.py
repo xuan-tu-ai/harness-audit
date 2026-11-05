@@ -49,6 +49,19 @@ def test_audit_without_manifest_on_init_example(tmp_path) -> None:
     assert "Attribution" in r.output
 
 
+def test_init_manifest_is_valid_and_audits(tmp_path) -> None:
+    from harness_audit.io import read_manifest
+
+    assert runner.invoke(app, ["init", str(tmp_path)]).exit_code == 0
+    m = read_manifest(tmp_path / "manifest.yaml")
+    rubric = m.changed_artifacts[0].rubric
+    assert [i.id for i in rubric] == ["fix", "tests", "refix", "plan"] and rubric[0].pattern == r"\.py$"
+    assert m.oracle.outside_workspace is True
+    args = ["audit", str(tmp_path / "runs.example.jsonl"), "-m", str(tmp_path / "manifest.yaml"), "-o", str(tmp_path / "r")]
+    r = runner.invoke(app, args)
+    assert r.exit_code in (0, 1), r.output
+
+
 def test_report_rerenders_from_json(tmp_path) -> None:
     runner.invoke(app, ["synth", "-o", str(tmp_path / "d")])
     runner.invoke(

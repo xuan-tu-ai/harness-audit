@@ -17,8 +17,13 @@ changed_artifacts:  # what differs between A and B
     kind: skill     # skill | system_prompt | file | tool | code | config
     change: added   # added | modified | removed
     hash_b: "sha256:..."
-    signatures:     # optional: declared trace features that show the update was carried
-      - {tool: Bash, pattern: "pytest"}
+    rubric:         # optional: the artifact's instructions, checked against each trajectory (adherence).
+                    # carried = every required item met, counting from when the artifact was reached.
+      - {id: fix, text: "Fix the code", tool: "Edit|Write", pattern: '\\.py$'}
+      - {id: tests, text: "Then run the tests", tool: Bash, pattern: "pytest", after: [fix]}
+      - {id: refix, text: "If tests fail, fix and rerun", tool: "Edit|Write", on_failure_of: [tests]}
+      - {id: plan, text: "Plan before editing", check: judge, required: false}   # needs an external judge
+    # signatures: [{tool: Bash, pattern: "pytest"}]   # shorthand: a one-item rubric
     applies_to: [strings]   # optional: task ids or groups (globs) where the update is meant to apply,
                             # declared before seeing outcomes; the denominator of the load/reach rates
 

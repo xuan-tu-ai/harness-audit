@@ -11,13 +11,12 @@ Attribution, so the conditional-effect figures here are reported as notes.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
 import numpy as np
 
-from .. import data
-from ..schema import ChangedArtifact, CheckResult, ClaimResult, Event, RunRecord, Status
+from .. import adherence, data
+from ..schema import ChangedArtifact, CheckResult, ClaimResult, Event, RubricItem, RunRecord, Status
 from .context import PRIMARY_SPLIT, Context, make_claim
 
 _CRIT_C = "reached or carried evidence from the scored runs → C (existence; coverage recorded)"
@@ -31,32 +30,35 @@ def _is(ev: Event, art: ChangedArtifact) -> bool:
     return bool(art.hash_b and ev.hash == art.hash_b)
 
 
-def _sig_match(ev: Event, art: ChangedArtifact) -> bool:
-    if ev.type != "tool_call" or not art.signatures:
-        return False
-    for s in art.signatures:
-        if s.tool is not None and ev.name != s.tool:
-            continue
-        if re.search(s.pattern, ev.summary or ""):
-            return True
-    return False
+def anchor(run: RunRecord, art: ChangedArtifact) -> float | None:
+    """Time from which the artifact's guidance can be followed: first reach (or load, for prompts)."""
+    evs = run.events or []
+    reached = [e.t for e in evs if e.type == "artifact_reached" and _is(e, art)]
+    loaded = [e.t for e in evs if e.type == "artifact_loaded" and _is(e, art)]
+    pool = reached if art.carried_requires_reached else (reached or loaded)
+    return min(pool) if pool else None
 
 
 def grades(run: RunRecord, art: ChangedArtifact) -> dict[str, bool]:
-    """Activation grades of one run for one artifact."""
-    evs = sorted(run.events or [], key=lambda e: e.t)
-    loaded = [e.t for e in evs if e.type == "artifact_loaded" and _is(e, art)]
-    reached = [e.t for e in evs if e.type == "artifact_reached" and _is(e, art)]
+    """Activation grades of one run for one artifact.
+
+    Carried is an explicit ``artifact_carried`` event, or adherence to the artifact's rubric (every
+    required, decidable item met) from the moment it was reached; declared signatures act as a
+    one-item rubric.
+    """
+    evs = run.events or []
+    loaded = any(e.type == "artifact_loaded" and _is(e, art) for e in evs)
+    reached = any(e.type == "artifact_reached" and _is(e, art) for e in evs)
     carried = any(e.type == "artifact_carried" and _is(e, art) for e in evs)
-    anchor_list = reached if art.carried_requires_reached else (reached or loaded)
-    if not carried and anchor_list:
-        anchor = min(anchor_list)
-        carried = any(_sig_match(e, art) and e.t >= anchor for e in evs)
-    return {"available": bool(loaded or reached or carried), "reached": bool(reached), "carried": carried}
+    if not carried and art.effective_rubric():
+        start = anchor(run, art)
+        carried = start is not None and bool(adherence.evaluate(evs, art, start).carried)
+    return {"available": loaded or reached or carried, "reached": reached, "carried": carried}
 
 
 def _any_sig(run: RunRecord, art: ChangedArtifact) -> bool:
-    return any(_sig_match(e, art) for e in (run.events or []))
+    item = RubricItem(id="signature", any_of=art.signatures)
+    return any(adherence._matches(e, item) for e in (run.events or []))
 
 
 def _rate(k: int, n: int) -> float | None:
@@ -191,6 +193,7 @@ def audit_activation(ctx: Context) -> ClaimResult:
         )
     )
 
+    checks.append(adherence_check(traced, a_traced, arts))
     checks.append(_baseline_clean(ctx, a_runs, arts))
     applicable = [r for r in traced if any(a.applies(r.task_id, r.task_group) for a in arts)]
     k_app = sum(act_by_run[r.run_id] for r in applicable)
@@ -306,3 +309,108 @@ def _conditional(
             )
         )
     return out
+
+
+def adherence_rates(b_runs: list[RunRecord], a_runs: list[RunRecord], art: ChangedArtifact) -> dict[str, object]:
+    """Per-item adherence in B (from the anchor, over the carry denominator) and in A (whole run)."""
+    rubric = art.effective_rubric()
+    base_b = []
+    for r in _applicable(b_runs, art):
+        g = grades(r, art)
+        if g["reached"] if art.executable else g["available"]:
+            base_b.append(r)
+    res_b = [adherence.evaluate(r.events or [], art, anchor(r, art)) for r in base_b]
+    res_a = [adherence.evaluate(r.events or [], art, 0.0) for r in _applicable(a_runs, art)]
+
+    def item_rate(results: list[adherence.RubricResult], iid: str) -> dict[str, object]:
+        outs = [x.items[iid] for x in results]
+        met, unmet = outs.count("met"), outs.count("unmet")
+        return {
+            "met": f"{met}/{met + unmet}",
+            "rate": _rate(met, met + unmet),
+            "n/a": outs.count("n/a"),
+            "unjudged": outs.count("unjudged"),
+        }
+
+    def carried(results: list[adherence.RubricResult]) -> tuple[int, int]:
+        c = [x.carried for x in results if x.carried is not None]
+        return sum(c), len(c)
+
+    def mean_score(results: list[adherence.RubricResult]) -> float | None:
+        sc = [x.score for x in results if x.score is not None]
+        return round(sum(sc) / len(sc), 4) if sc else None
+
+    kb, nb = carried(res_b)
+    ka, na = carried(res_a)
+    return {
+        "items": {
+            i.id: {
+                "text": i.text,
+                "required": i.required,
+                "check": i.check,
+                "B": item_rate(res_b, i.id),
+                "A": item_rate(res_a, i.id),
+            }
+            for i in rubric
+        },
+        "followed_B": f"{kb}/{nb}",
+        "followed_rate_B": _rate(kb, nb),
+        "followed_A": f"{ka}/{na}",
+        "followed_rate_A": _rate(ka, na),
+        "mean_adherence_B": mean_score(res_b),
+        "mean_adherence_A": mean_score(res_a),
+        "b_runs_scored": "reached" if art.executable else "loaded",
+        "unjudged_required_items": sorted({i for x in res_b + res_a for i in x.unjudged_required}),
+        "from_signatures": not art.rubric,
+    }
+
+
+def adherence_check(traced: list[RunRecord], a_traced: list[RunRecord], arts: list[ChangedArtifact]) -> CheckResult:
+    """Carried for guidance, read as adherence to the artifact's rubric; compared with the baseline."""
+    title = "Adherence to the update's instructions (carried)"
+    crit = "for an instruction or skill, carried evidence records adherence in the trajectory (report §6.2.2)"
+    with_rubric = [a for a in arts if a.effective_rubric()]
+    if not with_rubric:
+        return CheckResult(
+            id="adherence",
+            title=title,
+            status=Status.SKIP,
+            required=False,
+            rubric=False,
+            criterion=crit,
+            reason="No rubric or trace signatures are declared for the changed artifacts.",
+        )
+    per = {a.path: adherence_rates(traced, a_traced, a) for a in with_rubric}
+    weak: list[str] = []
+    undecided: list[str] = []
+    parts: list[str] = []
+    for path, d in per.items():
+        rb, ra = d["followed_rate_B"], d["followed_rate_A"]
+        if rb is None:
+            undecided.append(path)
+            continue
+        parts.append(f"{path}: followed in {d['followed_B']} B runs that {d['b_runs_scored']} it vs {d['followed_A']} A runs")
+        if ra is not None and rb <= ra:
+            weak.append(path)
+    unj = sorted({i for d in per.values() for i in d["unjudged_required_items"]})
+    tail = f" Required judge items not yet judged: {', '.join(unj)}." if unj else ""
+    metrics = {"per_artifact": per}
+    if weak:
+        why = (
+            "The procedure is followed no more often with the update than without it ("
+            + "; ".join(parts)
+            + "): adherence does not show the update operating."
+            + tail
+        )
+        st = Status.NOTE
+    elif not parts:
+        why = "No rubric item could be decided in the scored runs." + tail
+        st = Status.SKIP
+    else:
+        why = "; ".join(parts) + "." + tail
+        st = Status.PASS
+    if undecided and parts:
+        why += f" Undecided: {', '.join(undecided)}."
+    return CheckResult(
+        id="adherence", title=title, status=st, reason=why, required=False, rubric=False, criterion=crit, metrics=metrics
+    )

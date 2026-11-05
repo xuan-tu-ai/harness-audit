@@ -10,7 +10,8 @@ from typing import Any
 from .schema import AuditResult, CheckResult, ClaimResult, Status, Verdict
 
 SOURCE_NOTE = (
-    "Criteria follow *Self-Evolving Agent Harness* (Wei et al., 2026, arXiv:2610.18813) and the claim-audit rubric "
+    "Criteria follow *Self-Evolving Agent Harness* (Wei et al., 2026, arXiv:2610.18813), §6 of its companion technical "
+    "report (openreview.net/pdf?id=m5jsFGXUM2) and the claim-audit rubric "
     "of [zgcagi/Harness-RSI](https://github.com/zgcagi/Harness-RSI) (`docs/evidence-criteria.md`, "
     "`data/claim-audit-rubric.md`), licensed CC BY 4.0. harness-audit is an independent implementation."
 )
@@ -57,6 +58,28 @@ def _detail_rows(ch: CheckResult) -> tuple[list[str], list[list[str]]] | None:
         ]
         head = ["artifact", "applicable runs", "load", "reach", "carry", "signature rate A", "signature rate B"]
         return head, rows
+    if ch.id == "adherence" and "per_artifact" in m:
+
+        def rate(d: dict[str, Any]) -> str:
+            extra = [f"{d[k]} {k}" for k in ("n/a", "unjudged") if d.get(k)]
+            core = f"{d['met']} ({_f(d['rate'], 2)})" if d["rate"] is not None else f"{d['met']} (undefined)"
+            return core + (f"; {', '.join(extra)}" if extra else "")
+
+        rows = []
+        for p, d in m["per_artifact"].items():
+            rows.append(
+                [
+                    f"{p}: followed (every required item)",
+                    "",
+                    "",
+                    rate({"met": d["followed_B"], "rate": d["followed_rate_B"]}),
+                    rate({"met": d["followed_A"], "rate": d["followed_rate_A"]}),
+                ]
+            )
+            for iid, it in d["items"].items():
+                label = f"{iid}" + (f": {it['text']}" if it.get("text") else "")
+                rows.append([label, "yes" if it["required"] else "no", it["check"], rate(it["B"]), rate(it["A"])])
+        return ["rubric item", "required", "check", "B (from the update)", "A (whole run)"], rows
     if ch.id == "heldout_gain" and "per_group" in m:
         rows = [
             [
@@ -118,7 +141,7 @@ def to_markdown(res: AuditResult) -> str:
             if d:
                 head, rows = d
                 out += ["", f"*{ch.title}*", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-                out += ["| " + " | ".join(r) + " |" for r in rows]
+                out += ["| " + " | ".join(c.replace("|", "\\|") for c in r) + " |" for r in rows]
     out += [
         "",
         "Legend: ✅ pass · ◐ partial · ❌ fail · ∅ missing data · ⚑ advisory note (does not change the verdict).",

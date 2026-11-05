@@ -31,7 +31,10 @@ class FakeAdapter:
             path = req.harness.skill_path(req.harness.skills[0])
             events.insert(0, Event(t=0.0, type="artifact_loaded", artifact=path))
             events.append(Event(t=0.2, type="artifact_reached", artifact=path, evidence="Skill tool invoked"))
-            events.append(Event(t=0.3, type="tool_call", name="Bash", summary="python -c 'assert f(0) == 0'"))
+            # Follows the skill's procedure: fix, public tests, then edge-case asserts.
+            events.append(Event(t=0.3, type="tool_call", name="Edit", summary="module.py", ok=True))
+            events.append(Event(t=0.4, type="tool_call", name="Bash", summary="python test_public.py", ok=True))
+            events.append(Event(t=0.5, type="tool_call", name="Bash", summary="python -c 'assert f(0) == 0'", ok=True))
             module = next(p for p in req.workdir.glob("*.py") if p.name != "test_public.py")
             shutil.copy(req.task.evaluator_dir / "reference.py", module)
         usage = Usage(

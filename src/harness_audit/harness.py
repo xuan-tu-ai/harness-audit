@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .hashing import dir_file_hashes, dir_hash
 from .io import InputError
-from .schema import ChangedArtifact, Signature
+from .schema import ChangedArtifact, RubricItem, Signature
 
 ENVELOPE_KEYS = ("max_turns", "effort", "thinking")
 """Config keys that change the inference envelope: a difference is a confound, not the update."""
@@ -34,6 +34,9 @@ class HarnessConfig(BaseModel):
     thinking: str | None = None
     skills_dir: str = "skills"
     signatures: dict[str, list[Signature]] = Field(default_factory=dict)
+    rubrics: dict[str, list[RubricItem]] = Field(
+        default_factory=dict, description="artifact path -> instructions checked against each trajectory (adherence)"
+    )
     applies_to: dict[str, list[str]] = Field(
         default_factory=dict, description="artifact path -> task ids or groups (globs) where the update is meant to apply"
     )
@@ -93,6 +96,7 @@ def diff_harnesses(a: Harness, b: Harness) -> tuple[list[ChangedArtifact], list[
         change = "added" if ha is None else "removed" if hb is None else "modified"
         sigs = b.config.signatures.get(path, [])
         scope = b.config.applies_to.get(path)
+        rubric = b.config.rubrics.get(path, [])
         arts.append(
             ChangedArtifact(
                 path=path,
@@ -101,12 +105,13 @@ def diff_harnesses(a: Harness, b: Harness) -> tuple[list[ChangedArtifact], list[
                 hash_a=ha,
                 hash_b=hb,
                 signatures=sigs,
+                rubric=rubric,
                 applies_to=scope,
             )
         )
     confounds: list[str] = []
-    ca = a.config.model_dump(exclude={"name", "signatures", "applies_to"})
-    cb = b.config.model_dump(exclude={"name", "signatures", "applies_to"})
+    ca = a.config.model_dump(exclude={"name", "signatures", "rubrics", "applies_to"})
+    cb = b.config.model_dump(exclude={"name", "signatures", "rubrics", "applies_to"})
     for key in sorted(ca):
         if ca[key] == cb[key]:
             continue

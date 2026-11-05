@@ -53,7 +53,7 @@ def test_harness_hash_and_diff(tmp_path: Path) -> None:
     assert a.hash != b.hash and b.skills == ["python-bugfix"] and a.skills == []
     arts, confounds = diff_harnesses(a, b)
     assert [(x.path, x.kind, x.change) for x in arts] == [("skills/python-bugfix/SKILL.md", "skill", "added")]
-    assert arts[0].signatures and arts[0].signatures[0].tool == "Bash"
+    assert arts[0].rubric and arts[0].rubric[0].tool == "Read"
     assert confounds == []
     c = tmp_path / "c"
     shutil.copytree(EXAMPLES / "harness_b", c)

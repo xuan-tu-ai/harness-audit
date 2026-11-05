@@ -6,7 +6,9 @@ API used (checked against claude-agent-sdk 0.2.178 source and docs):
   ``AssistantMessage`` and finally ``ResultMessage`` (``total_cost_usd``, ``usage``,
   ``num_turns``, ``duration_ms``, ``subtype``). ``query()`` streams internally, so hooks work.
 - ``hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[cb])]}``; ``cb(input, tool_use_id, ctx)``
-  receives ``tool_name`` / ``tool_input`` and returns ``{}`` to allow.
+  receives ``tool_name`` / ``tool_input`` and returns ``{}`` to allow. ``PostToolUse`` and
+  ``PostToolUseFailure`` hooks, and ``ToolResultBlock.is_error`` in ``UserMessage`` content, give each
+  call's outcome (recorded as ``ok``; failure from any source wins).
 - Skills are ``<cwd>/.claude/skills/<name>/SKILL.md``, discovered through ``setting_sources``;
   ``skills=[...]`` filters what the model may invoke; the ``init`` system message lists loaded
   skills in ``data["skills"]``. We pass ``setting_sources=["project"]`` so the host's user
@@ -26,6 +28,7 @@ aborted before any model call if the CLI's ``init`` message reports an ``apiKeyS
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -107,6 +110,7 @@ class TraceRecorder:
         self.tool_calls = 0
         self.loaded_skills: list[str] = []
         self.external_skills: list[str] = []
+        self._calls: dict[str, Event] = {}
 
     def _t(self) -> float:
         return round(time.monotonic() - self.t0, 3)
@@ -150,15 +154,17 @@ class TraceRecorder:
             tool_input = input_data.get("tool_input") or {}
             self.tool_calls += 1
             t = self._t()
-            self.events.append(
-                Event(
-                    t=t,
-                    type="tool_call",
-                    name=name,
-                    args_hash=_args_hash(tool_input),
-                    summary=summarize(name, tool_input, self.workdir),
-                )
+            ev = Event(
+                t=t,
+                type="tool_call",
+                name=name,
+                args_hash=_args_hash(tool_input),
+                summary=summarize(name, tool_input, self.workdir),
             )
+            self.events.append(ev)
+            tid = tool_use_id or input_data.get("tool_use_id")
+            if tid:
+                self._calls[str(tid)] = ev
             reached = self._reached(name, tool_input)
             if reached:
                 path, evidence = reached
@@ -168,6 +174,33 @@ class TraceRecorder:
         except Exception:  # noqa: BLE001 - tracing must never break the run
             pass
         return {}
+
+    def set_outcome(self, tool_use_id: str | None, ok: bool) -> None:
+        """Record whether a call succeeded; a failure signal from any source wins over success."""
+        ev = self._calls.get(str(tool_use_id)) if tool_use_id else None
+        if ev is None:
+            return
+        if not ok:
+            ev.ok = False
+        elif ev.ok is None:
+            ev.ok = True
+
+    async def post_tool_use(self, input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+        """PostToolUse hook: the call returned (its result may still be an error, see ``on_tool_result``)."""
+        with contextlib.suppress(Exception):  # tracing must never break the run
+            self.set_outcome(tool_use_id or input_data.get("tool_use_id"), True)
+        return {}
+
+    async def post_tool_use_failure(self, input_data: dict[str, Any], tool_use_id: str | None, context: Any) -> dict[str, Any]:
+        """PostToolUseFailure hook: the call failed."""
+        with contextlib.suppress(Exception):  # tracing must never break the run
+            self.set_outcome(tool_use_id or input_data.get("tool_use_id"), False)
+        return {}
+
+    def on_tool_result(self, tool_use_id: str, is_error: bool | None) -> None:
+        """A tool result block in the message stream; ``is_error`` marks a failed call (e.g. non-zero exit)."""
+        if is_error is not None:
+            self.set_outcome(tool_use_id, not is_error)
 
     def _reached(self, name: str, tool_input: dict[str, Any]) -> tuple[str, str] | None:
         if name == "Skill":
@@ -267,7 +300,11 @@ class ClaudeAgentSDKAdapter:
             model=req.model,
             max_turns=cfg.max_turns,
             max_budget_usd=req.max_budget_usd,
-            hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[recorder.pre_tool_use])]},
+            hooks={
+                "PreToolUse": [HookMatcher(matcher=None, hooks=[recorder.pre_tool_use])],
+                "PostToolUse": [HookMatcher(matcher=None, hooks=[recorder.post_tool_use])],
+                "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[recorder.post_tool_use_failure])],
+            },
             env=child_env(config_dir or req.workdir.parent / "claude-config"),
         )
         if cfg.effort:
@@ -278,7 +315,7 @@ class ClaudeAgentSDKAdapter:
 
     async def run(self, req: RunRequest) -> AdapterResult:
         try:
-            from claude_agent_sdk import ResultMessage, SystemMessage, query
+            from claude_agent_sdk import ResultMessage, SystemMessage, ToolResultBlock, UserMessage, query
         except ImportError as e:  # pragma: no cover - exercised only without the extra
             raise RuntimeError("claude-agent-sdk is not installed: pip install 'harness-audit[claude]'") from e
 
@@ -301,6 +338,10 @@ class ClaudeAgentSDKAdapter:
                         )
                     rec.on_init(msg.data)
                     model_seen = msg.data.get("model") or model_seen
+                elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
+                    for block in msg.content:
+                        if isinstance(block, ToolResultBlock):
+                            rec.on_tool_result(block.tool_use_id, block.is_error)
                 elif isinstance(msg, ResultMessage):
                     result = msg
 

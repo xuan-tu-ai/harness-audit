@@ -80,6 +80,7 @@ followed it").
 | Three rates (report Eq. 11) | metrics of `reached_or_carried` | `R(u)`: scored B runs where the artifact applies (`applies_to` globs on task id or group, declared before outcomes; default all). `load = |L|/|R|`, `reach = |B|/|R|`, `carry = |C|/|L|` for guidance (skill, prompt, file, config) or `|C|/|B|` for code and tools. A zero denominator gives `null` plus the counts, never 0 | reported |
 | **C** requires reached or carried evidence tied to the primary comparison; "one confirmed case can qualify; always record coverage" | `reached_or_carried` | per changed artifact: count of B report runs with reached / carried; coverage string `k/n scored runs` | ≥1 run reached/carried for any changed artifact → `pass`; only loaded → `warn` (O); traces present but artifact never loaded/reached → `fail` (N); no events at all → `skip` → UNKNOWN |
 | Evidence must come from the scored runs | `bound_to_primary` | only `report`-split B runs count; events from other splits are listed separately | reported |
+| Carried for guidance = adherence: "trajectories scored against a rubric extracted from the skill text" (report §6.2.2) | `adherence` | declared rubric per artifact (`RubricItem`: tool regex, summary pattern, `ok`, `after`, `on_failure_of`, `required`, `check: trace\|judge`); evaluated from the anchor (first reach, or load for prompts) in B and over the whole run in A; per-run carried = every required, decidable item met; `judge` items only from `rubric_judgment` events | `pass` when reported; `note` when B follows no more often than A (does not change the verdict); `skip` with no rubric or signatures. The `carried` grade of `reached_or_carried` uses the same rubric. |
 | Baseline contamination | `baseline_clean` | A runs that load an artifact with B's hash | any → `warn` |
 | Conditional effect (spec) | `conditional_effect` | mean score of B runs where the update was reached vs not reached, each paired with A on the same tasks | reported |
 | "Improvement not via the update path" (spec) | `gain_without_activation` | reached rate `< thresholds.low_reach` (default 0.2) while `Δ` is positive and its CI excludes 0, or gain in not-reached runs ≥ gain in reached runs | `note` (does not change the verdict: per rubric, "a counterfactual score change belongs to Attribution") |
@@ -253,6 +254,7 @@ imported lazily by the adapter.
 | `retention_regression` | B drops on retention tasks beyond the threshold | `retention` | Improvement FAIL |
 | `no_traces` | no traces collected | `reached_or_carried` | Activation UNKNOWN |
 | `oracle_touched` | some B runs read the hidden tests | `oracle_integrity` | Selection PARTIAL |
+| `reached_not_followed` | B invokes the skill but follows it in ~5% of runs vs ~25% in A | `adherence` (note) | PASS ×4 |
 
 Each defect scenario also asserts that the *other* claims keep their clean verdict, so a check that
 fires everywhere does not pass the suite.
@@ -262,8 +264,9 @@ fires everywhere does not pass the suite.
 1. **Statistical power with few tasks.** The admission gate needs a large effect at small `m`
    (`m = 8`, `K = T = 1`, `δ = 0.05` → `ε ≈ 0.87`). Real dogfood runs will likely show the gate as not
    cleared; the report says so rather than hiding it.
-2. **Activation for interpreted guidance** is only as good as the declared signatures; adherence can
-   also occur in A, so the report shows the signature's baseline rate in A next to the rate in B.
+2. **Activation for interpreted guidance** is only as good as the declared adherence rubric, which is
+   hand-written and sees tool calls only; reasoning steps need a judge (`check: judge`), not yet shipped.
+   Adherence can also occur in A, so the report shows each item's rate in A next to B.
 3. **SDK cost is a client-side estimate** (docs: "not authoritative billing data"). The budget guard uses
    it plus a margin; the README says so.
 4. **Claude Agent SDK internals move fast** (bundled CLI 2.1.318). The adapter only uses documented

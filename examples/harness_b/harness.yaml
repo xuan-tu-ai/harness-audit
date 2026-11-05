@@ -3,7 +3,43 @@ name: baseline+python-bugfix-skill
 system_prompt_file: system_prompt.md
 allowed_tools: [Read, Edit, Write, Bash, Glob, Grep]
 max_turns: 20
-signatures:
-  # Declared trace feature: the skill tells the agent to check edge cases with `python -c` asserts.
+rubrics:
+  # Adherence rubric drawn from the skill's own steps. Carried = every required item met, counting
+  # from the moment the skill was invoked. Trace items read tool calls (name, command or file path,
+  # and whether the call succeeded); `judge` items need an external judge and are not scored offline.
   skills/python-bugfix/SKILL.md:
-    - {tool: Bash, pattern: "python3? -c"}
+    - id: read_function
+      text: "1. Read the whole function and its docstring."
+      tool: Read
+      pattern: '\.py$'
+      required: false   # agents often read the file before invoking the skill
+    - id: list_edge_cases
+      text: "2. Before editing, list the edge cases the docstring implies."
+      check: judge
+      required: false
+    - id: fix
+      text: "3. Fix the function. Keep its name and signature."
+      tool: "Edit|MultiEdit|Write"
+      pattern: '\.py$'
+    - id: public_tests
+      text: "4. Verify: run `python test_public.py` ..."
+      tool: Bash
+      pattern: 'test_public\.py'
+      after: [fix]
+    - id: edge_case_asserts
+      text: "4. ... then run one `python -c` command whose `assert` statements check every edge case."
+      tool: Bash
+      pattern: 'python3? -c .*assert'
+      after: [public_tests]
+    - id: fix_after_failure
+      text: "5. If a check fails, fix the code ..."
+      tool: "Edit|MultiEdit|Write"
+      pattern: '\.py$'
+      on_failure_of: [public_tests, edge_case_asserts]
+    - id: rerun_after_fix
+      text: "5. ... and run both checks again until they pass."
+      tool: Bash
+      pattern: 'test_public\.py|python3? -c'
+      ok: true
+      after: [fix_after_failure]
+      on_failure_of: [public_tests, edge_case_asserts]
