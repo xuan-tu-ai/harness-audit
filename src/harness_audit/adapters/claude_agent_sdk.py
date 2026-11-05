@@ -111,6 +111,11 @@ class TraceRecorder:
         self.loaded_skills: list[str] = []
         self.external_skills: list[str] = []
         self._calls: dict[str, Event] = {}
+        self.effort_levels: set[str] = set()
+        self.main_models: list[str] = []
+        self._message_ids: set[str] = set()
+        self._anonymous_messages = 0
+        self.runtime: str | None = None
 
     def _t(self) -> float:
         return round(time.monotonic() - self.t0, 3)
@@ -129,7 +134,9 @@ class TraceRecorder:
             )
 
     def on_init(self, data: dict[str, Any]) -> None:
-        """Record which skills the CLI reports as loaded for this session."""
+        """Record which skills the CLI reports as loaded for this session, and the runtime version."""
+        if data.get("claude_code_version"):
+            self.runtime = f"claude-code/{data['claude_code_version']}"
         for name in data.get("skills") or []:
             name = str(name)
             if name in self.harness.skills:
@@ -152,6 +159,9 @@ class TraceRecorder:
         try:
             name = str(input_data.get("tool_name", ""))
             tool_input = input_data.get("tool_input") or {}
+            effort = input_data.get("effort")
+            if isinstance(effort, dict) and effort.get("level"):
+                self.effort_levels.add(str(effort["level"]))
             self.tool_calls += 1
             t = self._t()
             ev = Event(
@@ -197,6 +207,20 @@ class TraceRecorder:
             self.set_outcome(tool_use_id or input_data.get("tool_use_id"), False)
         return {}
 
+    def on_assistant(self, model: str | None, message_id: str | None, parent_tool_use_id: str | None) -> None:
+        """One assistant message: counts model requests (sub-agents included) and the served model id."""
+        if message_id:
+            self._message_ids.add(message_id)
+        else:
+            self._anonymous_messages += 1
+        if model and parent_tool_use_id is None and model not in self.main_models:
+            self.main_models.append(model)
+
+    @property
+    def model_calls(self) -> int | None:
+        n = len(self._message_ids) + self._anonymous_messages
+        return n or None
+
     def on_tool_result(self, tool_use_id: str, is_error: bool | None) -> None:
         """A tool result block in the message stream; ``is_error`` marks a failed call (e.g. non-zero exit)."""
         if is_error is not None:
@@ -219,7 +243,7 @@ class TraceRecorder:
         return None
 
 
-def result_usage(msg: Any, model: str, tool_calls: int, wall_s: float) -> Usage:
+def result_usage(msg: Any, model: str, tool_calls: int, wall_s: float, model_calls: int | None = None) -> Usage:
     """Build Usage from a ResultMessage (its cost is the SDK's client-side estimate)."""
     u = dict(getattr(msg, "usage", None) or {})
     usage = Usage(
@@ -231,6 +255,8 @@ def result_usage(msg: Any, model: str, tool_calls: int, wall_s: float) -> Usage:
         wall_s=round(wall_s, 3),
         tool_calls=tool_calls,
         num_turns=getattr(msg, "num_turns", None),
+        model_calls=model_calls,
+        attempts=1,
     )
     if not usage.cost_usd:
         try:
@@ -238,6 +264,26 @@ def result_usage(msg: Any, model: str, tool_calls: int, wall_s: float) -> Usage:
         except KeyError:
             usage.cost_usd = None
     return usage
+
+
+def served_models(rec: TraceRecorder, result: Any) -> list[str] | None:
+    """Exact model ids that served the main loop; falls back to the result's per-model usage keys."""
+    if rec.main_models:
+        return list(rec.main_models)
+    mu = getattr(result, "model_usage", None) or {}
+    return sorted(mu) or None
+
+
+def decoding_of(cfg: Any, rec: TraceRecorder) -> dict[str, Any]:
+    """Generation settings in effect. The SDK exposes effort and thinking; sampling stays at the runtime default."""
+    return {
+        "effort": cfg.effort or "runtime default",
+        "effort_in_effect": sorted(rec.effort_levels) or None,
+        "thinking": cfg.thinking or "runtime default",
+        "temperature": "runtime default (not settable through the SDK)",
+        "max_turns": cfg.max_turns,
+        "fallback_model": None,
+    }
 
 
 def status_of(msg: Any) -> str:
@@ -315,7 +361,8 @@ class ClaudeAgentSDKAdapter:
 
     async def run(self, req: RunRequest) -> AdapterResult:
         try:
-            from claude_agent_sdk import ResultMessage, SystemMessage, ToolResultBlock, UserMessage, query
+            from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, ToolResultBlock, UserMessage, query
+            from claude_agent_sdk import __version__ as sdk_version
         except ImportError as e:  # pragma: no cover - exercised only without the extra
             raise RuntimeError("claude-agent-sdk is not installed: pip install 'harness-audit[claude]'") from e
 
@@ -338,6 +385,8 @@ class ClaudeAgentSDKAdapter:
                         )
                     rec.on_init(msg.data)
                     model_seen = msg.data.get("model") or model_seen
+                elif isinstance(msg, AssistantMessage):
+                    rec.on_assistant(msg.model, msg.message_id, msg.parent_tool_use_id)
                 elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                     for block in msg.content:
                         if isinstance(block, ToolResultBlock):
@@ -359,15 +408,25 @@ class ClaudeAgentSDKAdapter:
             shutil.rmtree(config_dir, ignore_errors=True)
         wall = time.monotonic() - t0
         if result is not None:
-            usage = result_usage(result, req.model, rec.tool_calls, wall)
+            usage = result_usage(result, req.model, rec.tool_calls, wall, rec.model_calls)
             if status == "ok":
                 status = status_of(result)
                 if status == "error":
                     error = "; ".join(getattr(result, "errors", None) or []) or getattr(result, "subtype", "error")
         else:
-            usage = Usage(tool_calls=rec.tool_calls, wall_s=round(wall, 3))
+            usage = Usage(tool_calls=rec.tool_calls, wall_s=round(wall, 3), model_calls=rec.model_calls, attempts=1)
         if rec.external_skills:
             rec.events.append(
                 Event(t=0.0, type="external_skills", evidence="skills not from this harness: " + ", ".join(rec.external_skills))
             )
-        return AdapterResult(events=rec.events, usage=usage, status=status, error=error, model=model_seen or req.model)
+        runtime = "; ".join(x for x in (rec.runtime, f"claude-agent-sdk/{sdk_version}") if x)
+        return AdapterResult(
+            events=rec.events,
+            usage=usage,
+            status=status,
+            error=error,
+            model=model_seen or req.model,
+            model_versions=served_models(rec, result),
+            decoding=decoding_of(req.harness.config, rec),
+            runtime=runtime,
+        )

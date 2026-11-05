@@ -34,6 +34,10 @@ class Usage(_Model):
     wall_s: float | None = None
     tool_calls: int | None = None
     num_turns: int | None = None
+    model_calls: int | None = None
+    """Model requests in the run, including sub-agents, critics and verifiers inside the loop."""
+    attempts: int | None = None
+    """Independent tries of the task inside one scored run (best-of-n, pass@k); 1 for a single try."""
 
 
 class Event(_Model):
@@ -70,6 +74,12 @@ class RunRecord(_Model):
     status: str = "ok"
     usage: Usage | None = None
     events: list[Event] | None = None
+    model_versions: list[str] | None = None
+    """Exact model ids that served the main loop, as returned by the API (``model`` is what was requested)."""
+    decoding: dict[str, Any] | None = None
+    """Generation settings in effect: reasoning effort, thinking, temperature, turn limit, fallback model."""
+    runtime: str | None = None
+    """Agent runtime and version (e.g. ``claude-code/2.1.318``)."""
 
     @field_validator("score")
     @classmethod
@@ -214,6 +224,17 @@ class Oracle(_Model):
     )
 
 
+class SearchCost(_Model):
+    """Compute spent finding the update (proposal, ranking, admission), stated apart from the scored runs."""
+
+    usd: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    rollouts: int | None = None
+    candidates: int | None = None
+    notes: str | None = None
+
+
 class Arms(_Model):
     baseline: str = "A"
     candidate: str = "B"
@@ -262,6 +283,7 @@ class Manifest(_Model):
     proposal_groups: list[str] | None = None
     selection: SelectionConfig = Field(default_factory=SelectionConfig)
     oracle: Oracle = Field(default_factory=Oracle)
+    search_cost: SearchCost | None = None
     thresholds: Thresholds = Field(default_factory=Thresholds)
     tasks: list[TaskEntry] = Field(default_factory=list)
 

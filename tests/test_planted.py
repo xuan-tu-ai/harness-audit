@@ -30,6 +30,7 @@ EXPECTED: dict[str, tuple[dict[str, Verdict], dict[str, Status]]] = {
     # Reached is enough for the rubric's existence test, so Activation stays PASS; the note says the
     # skill was invoked but not followed (report §6.2.2: loading and adherence are different rates).
     "reached_not_followed": ({}, {"adherence": Status.NOTE}),
+    "model_version_drift": ({"Attribution": Verdict.FAIL}, {"model_record": Status.FAIL}),
 }
 
 

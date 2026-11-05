@@ -19,6 +19,7 @@ from .schema import (
     Manifest,
     Oracle,
     RunRecord,
+    SearchCost,
     SelectionConfig,
     Signature,
     TaskEntry,
@@ -36,6 +37,7 @@ SCENARIOS: dict[str, str] = {
     "no_traces": "No traces were collected, so Activation cannot be judged.",
     "oracle_touched": "Some B runs read the hidden tests that score them.",
     "reached_not_followed": "B invokes the skill but rarely follows its procedure afterwards.",
+    "model_version_drift": "The provider served B from a different model snapshot than A.",
 }
 
 SKILL = "skills/python-bugfix/SKILL.md"
@@ -123,6 +125,7 @@ def generate(scenario: str = "clean", seed: int = 0, seeds: int = 3) -> tuple[li
         selection=SelectionConfig(
             K=1, T=1, delta=0.05, admission_data="admission", report_uses=1, report_choice="fixed", n_compared=1
         ),
+        search_cost=SearchCost(usd=1.25, rollouts=40, candidates=1, notes="synthetic"),
         oracle=Oracle(outside_workspace=True, protected=[r"(^|[/\s])evaluator/", r"test_hidden\.py"]),
         tasks=registry,
     )
@@ -163,6 +166,8 @@ def _run(rng: np.random.Generator, scenario: str, t: _Task, arm: str, s: int) ->
         wall_s=round(float(rng.normal(40, 8)), 2),
         tool_calls=max(int(round(tools)), 1),
         num_turns=max(int(round(turns)), 1),
+        model_calls=max(int(round(turns)), 1),
+        attempts=1,
     )
 
     events: list[Event] | None = [Event(t=0.0, type="tool_call", name="Read", args_hash=_h(f"{t.task_id}r"), summary="buggy.py")]
@@ -196,4 +201,7 @@ def _run(rng: np.random.Generator, scenario: str, t: _Task, arm: str, s: int) ->
         evaluator_hash_after=EVAL_OTHER if (is_b and scenario == "evaluator_changed") else EVAL,
         usage=usage,
         events=events,
+        model_versions=[MODEL + ("-20261101" if is_b and scenario == "model_version_drift" else "-20260901")],
+        decoding={"effort": "default", "max_turns": 20, "temperature": "runtime default"},
+        runtime="synthetic-runtime/1.0",
     )

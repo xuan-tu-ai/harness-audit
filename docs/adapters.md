@@ -67,12 +67,19 @@ Load events alone grade as *available*, which the rubric treats as the weakest e
 cannot observe execution of the changed path, say so in the report rather than emitting `artifact_reached`
 by construction.
 
-## Usage
+## Usage and model record
 
 Fill `Usage` from the framework's own accounting when possible: `input_tokens`, `output_tokens`,
 `cache_read_input_tokens`, `cache_creation_input_tokens`, `cost_usd`, `num_turns`, `tool_calls`,
-`wall_s`. Attribution compares output tokens, turns and tool calls between arms; a missing value makes
-the envelope check partial, not passing. If `cost_usd` is `None` the budget guard counts the whole per-run
+`model_calls` (every model request, including sub-agents, critics and verifiers inside the loop),
+`attempts` (independent tries of the task in one run; the runner sets 1 when you leave it empty),
+`wall_s`. Also set `AdapterResult.model_versions` (the exact model ids the API reports serving, not the
+alias you requested), `decoding` (effort, thinking, temperature, turn limit actually in effect) and
+`runtime` (framework and version); the `model_record` check compares them across arms.
+
+Attribution compares output tokens, turns, tool calls, model calls and attempts between arms. A field you
+do not record is named in the report and left out of the comparison; if none is recorded, the envelope
+check is partial, not passing. If `cost_usd` is `None` the budget guard counts the whole per-run
 reservation as spent.
 
 ## Testing

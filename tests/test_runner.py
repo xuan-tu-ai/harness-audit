@@ -228,3 +228,14 @@ def test_harness_yaml_declares_applicability(tmp_path: Path) -> None:
     arts, confounds = diff_harnesses(load_harness(EXAMPLES / "harness_a"), load_harness(b))
     assert arts[0].applies_to == ["strings", "numbers/*"] and confounds == []
     assert arts[0].applies("numbers/clamp", "numbers") and not arts[0].applies("collections/chunk", "collections")
+
+
+def test_runner_records_model_and_runtime(exp_dir: Path, tmp_path: Path) -> None:
+    exp = load_experiment(exp_dir / "experiment.yaml", seeds=1)
+    r = Runner(exp, cache_dir=tmp_path / "cache", adapter=FakeAdapter())
+    recs = r.execute(r.plan(), max_cost=100)
+    assert all(x.model_versions and x.runtime == "fake/1" and x.decoding for x in recs)
+    assert all(x.usage.model_calls == 5 and x.usage.attempts == 1 for x in recs)
+    res = run_audit(recs, r.manifest())
+    assert res.check("model_record").status.value == "pass"
+    assert res.check("search_cost").status.value == "note"  # the example declares none

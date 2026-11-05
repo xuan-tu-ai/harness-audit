@@ -38,6 +38,19 @@ class FakeAdapter:
             module = next(p for p in req.workdir.glob("*.py") if p.name != "test_public.py")
             shutil.copy(req.task.evaluator_dir / "reference.py", module)
         usage = Usage(
-            input_tokens=20000, output_tokens=800, num_turns=5, tool_calls=6, cost_usd=self.cost if self.cost_known else None
+            input_tokens=20000,
+            output_tokens=800,
+            num_turns=5,
+            tool_calls=6,
+            model_calls=5,
+            cost_usd=self.cost if self.cost_known else None,
         )
-        return AdapterResult(events=events, usage=usage, status="ok", model=req.model)
+        return AdapterResult(
+            events=events,
+            usage=usage,
+            status="ok",
+            model=req.model,
+            model_versions=[req.model + "-fake-snapshot"],
+            decoding={"effort": "default", "max_turns": req.harness.config.max_turns, "temperature": "runtime default"},
+            runtime="fake/1",
+        )

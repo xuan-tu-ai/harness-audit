@@ -12,6 +12,7 @@ harness-audit is stricter in one place: a changed evaluator or model is ``FAIL``
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 
 import numpy as np
@@ -20,7 +21,7 @@ from .. import data
 from ..schema import CheckResult, ClaimResult, RunRecord, Status
 from .context import PRIMARY_SPLIT, Context, fmt_ci, make_claim, p_note
 
-ENVELOPE_FIELDS = ("output_tokens", "num_turns", "tool_calls")
+ENVELOPE_FIELDS = ("output_tokens", "num_turns", "tool_calls", "model_calls", "attempts")
 REPORTED_FIELDS = ("input_tokens", "cost_usd", "wall_s")
 
 
@@ -133,6 +134,8 @@ def audit_attribution(ctx: Context) -> ClaimResult:
         ctx.warnings.append(f"{len(p.unpaired)} report task(s) ran in only one arm and were dropped from pairing.")
 
     checks.append(_envelope(ctx))
+    checks.append(model_record(ctx))
+    checks.append(search_cost(ctx))
     checks.append(_margin(ctx))
     checks.append(_aa(ctx))
     return make_claim("Attribution", checks)
@@ -230,8 +233,11 @@ def _envelope(ctx: Context) -> CheckResult:
             status=Status.WARN,
             criterion=crit,
             metrics=metrics,
-            reason="Inference resources (output tokens, turns, tool calls) are not reported.",
+            reason="Inference resources (output tokens, turns, tool calls, model calls, attempts) are not reported.",
         )
+    absent = [f for f in ENVELOPE_FIELDS if f not in present]
+    metrics["not_recorded"] = absent
+    tail = f" Not recorded: {', '.join(absent)}." if absent else ""
     over = [f for f in present if table[f]["ratio_B_over_A"] > ctx.th.envelope_ratio]  # type: ignore[operator]
     if over:
         parts = ", ".join(f"{f} ×{table[f]['ratio_B_over_A']:.2f}" for f in over)
@@ -241,7 +247,7 @@ def _envelope(ctx: Context) -> CheckResult:
             status=Status.WARN,
             criterion=crit,
             metrics=metrics,
-            reason=f"B used more inference compute than A ({parts}; threshold ×{ctx.th.envelope_ratio:.2f}).",
+            reason=f"B used more inference compute than A ({parts}; threshold ×{ctx.th.envelope_ratio:.2f}).{tail}",
         )
     parts = ", ".join(f"{f} ×{table[f]['ratio_B_over_A']:.2f}" for f in present)
     return CheckResult(
@@ -250,7 +256,7 @@ def _envelope(ctx: Context) -> CheckResult:
         status=Status.PASS,
         criterion=crit,
         metrics=metrics,
-        reason=f"B's inference envelope is within ×{ctx.th.envelope_ratio:.2f} of A ({parts}).",
+        reason=f"B's inference envelope is within ×{ctx.th.envelope_ratio:.2f} of A ({parts}).{tail}",
     )
 
 
@@ -369,4 +375,130 @@ def _aa(ctx: Context) -> CheckResult:
         criterion=crit,
         metrics=metrics,
         reason=f"Δ_AB {est.mean:+.3f} exceeds the A/A noise band {fmt_ci(aa.ci_low, aa.ci_high)} ({source}).",
+    )
+
+
+def model_record(ctx: Context) -> CheckResult:
+    """Model and runtime record (report Table 5): served model versions, decoding settings, runtime.
+
+    Served versions that differ between A and B fail (the model, not the harness, may explain the
+    gain); the same mix in both arms warns. Decoding or runtime that differ between arms warn.
+    Fields missing from the records give a note and never change the verdict.
+    """
+    title = "Model version and decoding recorded"
+    crit = "model identifier and version, decoding parameters, scorer and judge versions, and any change to them"
+    arms = [a for a in (ctx.A, ctx.B, ctx.A2) if a]
+    recs = [r for r in ctx.records if r.arm in arms]
+    by_arm = {a: [r for r in recs if r.arm == a] for a in arms if any(r.arm == a for r in recs)}
+
+    def collect(get) -> dict[str, list[str]]:  # type: ignore[no-untyped-def]
+        out: dict[str, set[str]] = {}
+        for a, rs in by_arm.items():
+            vals = {v for r in rs for v in get(r)}
+            if vals:
+                out[a] = vals
+        return {a: sorted(v) for a, v in out.items()}
+
+    versions = collect(lambda r: r.model_versions or [])
+    decoding = collect(lambda r: [json.dumps(r.decoding, sort_keys=True)] if r.decoding is not None else [])
+    runtime = collect(lambda r: [r.runtime] if r.runtime else [])
+    missing = {
+        name: f"{sum(1 for r in recs if get(r) in (None, []))}/{len(recs)} runs"
+        for name, get in (
+            ("model_versions", lambda r: r.model_versions),
+            ("decoding", lambda r: r.decoding),
+            ("runtime", lambda r: r.runtime),
+        )
+        if any(get(r) in (None, []) for r in recs)
+    }
+    metrics = {
+        "served_model_versions": versions,
+        "decoding": {a: [json.loads(x) for x in v] for a, v in decoding.items()},
+        "runtime": runtime,
+        "missing": missing,
+    }
+    miss = f" Not recorded: {', '.join(f'{k} in {v}' for k, v in missing.items())}." if missing else ""
+
+    def differs(d: dict[str, list[str]]) -> bool:
+        return len({tuple(v) for v in d.values()}) > 1
+
+    def res(st: Status, why: str, **kw: object) -> CheckResult:
+        return CheckResult(
+            id="model_record",
+            title=title,
+            status=st,
+            reason=why + miss,
+            required=False,
+            criterion=crit,
+            metrics=metrics,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    if differs(versions):
+        shown = "; ".join(f"{a}: {', '.join(v)}" for a, v in versions.items())
+        return res(
+            Status.FAIL,
+            f"The served model version differs between arms ({shown}); the model may explain the gain.",
+            rubric_status=Status.WARN,
+        )
+    warns = []
+    if any(len(v) > 1 for v in versions.values()):
+        warns.append(f"several model versions served the runs in every arm ({', '.join(next(iter(versions.values())))})")
+    if differs(decoding):
+        warns.append("decoding settings differ between arms")
+    if differs(runtime):
+        shown = "; ".join(f"{a}: {', '.join(v)}" for a, v in runtime.items())
+        warns.append(f"the runtime differs between arms ({shown})")
+    if warns:
+        return res(Status.WARN, "Model record: " + "; ".join(warns) + ".")
+    parts = []
+    if versions:
+        parts.append(f"served by {', '.join(next(iter(versions.values())))} in every arm")
+    if decoding:
+        parts.append("decoding " + next(iter(decoding.values()))[0])
+    if runtime:
+        parts.append(f"runtime {', '.join(next(iter(runtime.values())))}")
+    if missing:
+        lead = (
+            ("Consistent where recorded: " + "; ".join(parts) + ".") if parts else "Model version and decoding are not recorded."
+        )
+        return res(Status.NOTE, lead)
+    return res(Status.PASS, "; ".join(parts).capitalize() + ".")
+
+
+def search_cost(ctx: Context) -> CheckResult:
+    """Search cost (report Table 5): the compute spent finding the update, stated apart from the scored runs."""
+    title = "Search cost stated separately"
+    crit = (
+        "search cost, the rollouts and tokens spent finding the update, belongs to the method; report it apart from the envelope"
+    )
+    scored = [r.usage.cost_usd for r in ctx.records if r.usage and r.usage.cost_usd is not None]
+    scored_usd = round(sum(scored), 4) if scored else None
+    sc = ctx.manifest.search_cost
+    metrics: dict[str, object] = {"declared": sc.model_dump(exclude_none=True) if sc else None, "scored_runs_usd": scored_usd}
+    if sc is None or not sc.model_dump(exclude_none=True, exclude={"notes"}):
+        return CheckResult(
+            id="search_cost",
+            title=title,
+            status=Status.NOTE,
+            rubric=False,
+            required=False,
+            criterion=crit,
+            metrics=metrics,
+            reason="Search cost is not declared (`search_cost` in the manifest).",
+        )
+    parts = [
+        f"{k.replace('_', ' ')} {('$' + format(v, '.4f')) if k == 'usd' else v}"
+        for k, v in sc.model_dump(exclude_none=True, exclude={"notes"}).items()
+    ]
+    tail = f"; scored runs cost ${scored_usd:.4f}" if scored_usd is not None else ""
+    return CheckResult(
+        id="search_cost",
+        title=title,
+        status=Status.PASS,
+        rubric=False,
+        required=False,
+        criterion=crit,
+        metrics=metrics,
+        reason=f"Declared search cost: {', '.join(parts)}{tail}. Not part of the scored-run envelope.",
     )

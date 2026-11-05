@@ -65,7 +65,7 @@ about one comparison cannot borrow evidence from another model, benchmark or exp
 |---|---|---|
 | **Selection** | Was the reported number measured, or picked? | Report tasks are disjoint from the tasks that proposed the update and from the admission tasks (by id and content hash); the report split was not used to choose the round or configuration and was not reused; the paper's admission gate `Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0` on fresh tasks, with `m` counted in **tasks**, not seeds; **oracle integrity**: the scorer stayed out of the agent's reach (evaluator unchanged after each run, no traced tool call touching hidden tests). |
 | **Activation** | Did the update operate in the scored runs? | Per changed artifact, the report's three rates (Eq. 11) over the scored B runs where the update applies (`applies_to`, declared in advance): **load** and **reach** over those runs, **carry** over the runs that loaded it (guidance) or reached it (code). For a skill or prompt, carried means the trajectory **adhered** to it, read against a rubric of its steps (see [Adherence](#adherence-did-the-agent-follow-the-skill)). A rate with nothing to divide by is shown as undefined with its counts, never as 0. Score difference when the update was activated versus not. |
-| **Attribution** | Did the gain come from the update, not noise, compute or the evaluator? | Same evaluator and model; arms differ only in the declared artifacts; inference envelope (output tokens, turns, tool calls) within a ratio of A; paired bootstrap over tasks and a sign-flip permutation test; Δ compared with an A/A noise band. |
+| **Attribution** | Did the gain come from the update, not noise, compute or the evaluator? | Same evaluator and model, including the **served model version** (a snapshot that differs between A and B fails), decoding settings and runtime; arms differ only in the declared artifacts; inference envelope (output tokens, turns, tool calls, **model calls** including sub-agents and verifiers, **attempts**) within a ratio of A; **search cost** stated apart from the scored runs; paired bootstrap over tasks and a sign-flip permutation test; Δ compared with an A/A noise band. |
 | **Improvement** | How far does the gain reach? | Task distance between report tasks and update-forming tasks; gain on task groups that did not form the update; no regression on a retention split beyond your threshold. |
 
 > **Activation** — "*Available*: the artifact entered the run. *Reached*: the changed path executed.
@@ -137,6 +137,7 @@ check fires, that the other checks stay quiet, and that a clean experiment passe
 | `no_traces` | no traces collected | `reached_or_carried` | Activation UNKNOWN |
 | `oracle_touched` | some B runs read the hidden tests | `oracle_integrity` | Selection PARTIAL |
 | `reached_not_followed` | B invokes the skill but rarely follows it | `adherence` (note) | PASS ×4 (reached is enough for the rubric's existence test) |
+| `model_version_drift` | the provider served B from another model snapshot | `model_record` | Attribution FAIL |
 
 ## Audit your own runs (any framework)
 
@@ -158,7 +159,10 @@ independent A/A replicate), `harness_hash`, `model`, `score` in [0, 1], `evaluat
 is optional and only lowers what can be concluded when absent. `events: null` means "not traced";
 `events: []` means "traced, nothing happened". Optional `evaluator_hash_after` is the evaluator hash re-read
 after the agent ran; if it differs from `evaluator_hash`, the run changed its own scorer and
-`oracle_integrity` fails.
+`oracle_integrity` fails. Optional `model_versions` (exact model ids that served the run), `decoding`
+(effort, thinking, temperature, turn limit) and `runtime` (e.g. `claude-code/2.1.318`) feed the
+`model_record` check, and `usage.model_calls` / `usage.attempts` join the envelope. Records without them
+are still audited; the report notes what was not recorded.
 
 `harness-audit init my-experiment/` writes a commented `manifest.yaml` (changed artifacts and their trace
 signatures, the task registry that shows the partition, `K`, `T`, `δ`, how the update was admitted, how
@@ -246,9 +250,11 @@ harness.
 - **Oracle integrity is detected, not enforced.** The runner keeps hidden tests out of the workspace and
   re-hashes the evaluator after every run, but an agent with Bash can still reach host paths. Reads are
   caught only if a traced tool call names a protected path. Run untrusted agents in a container.
-- **Not yet recorded** (report Table 5): model version and decoding parameters, retries and verifier
-  calls inside the loop, and search cost (the compute spent finding the update) separately from the scored
-  runs.
+- **Model record limits.** Through the Claude Agent SDK, sampling parameters such as temperature are not
+  settable, so they are recorded as the runtime default; HTTP-level retries are not exposed and are not
+  counted. Model calls are counted from assistant messages, sub-agents included.
+- **Search cost is declared, not measured**: harness-audit does not run the search that produced the
+  update, so `search_cost` in the manifest is only as accurate as what you enter.
 - **Small task sets have little power.** The admission gate needs more than `2·ln(K·T/δ)` tasks even for a
   perfect gain (6 tasks at `K = T = 1`, `δ = 0.05`), and an exact sign-flip test needs at least 6 tasks to reach p < 0.05. The report says when a check
   could not have passed at the given size.

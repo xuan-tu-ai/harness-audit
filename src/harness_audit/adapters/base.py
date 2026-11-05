@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from ..harness import Harness
 from ..schema import Event, Usage
@@ -36,6 +36,9 @@ class AdapterResult:
     status: str = "ok"  # ok | error | budget_exceeded | max_turns | timeout
     error: str | None = None
     model: str | None = None
+    model_versions: list[str] | None = None  # exact model ids that served the main loop
+    decoding: dict[str, Any] | None = None  # effort, thinking, temperature, turn limit in effect
+    runtime: str | None = None  # agent runtime and version, e.g. "claude-code/2.1.318"
 
 
 class FatalAdapterError(RuntimeError):

@@ -21,3 +21,6 @@ selection:
   report_uses: 1
   report_choice: fixed
   n_compared: 1
+# Compute spent finding the update, reported apart from the scored runs (report Table 5). The example's
+# skill was written by hand, with no measured search, so none is declared and the report says so.
+# search_cost: {usd: 1.80, rollouts: 60, candidates: 4, notes: "proposal loop on the proposal split"}

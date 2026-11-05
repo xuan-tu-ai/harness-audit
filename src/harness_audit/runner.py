@@ -27,7 +27,7 @@ from .evaluator import evaluator_hash, score_workspace
 from .harness import Harness, diff_harnesses, load_harness
 from .hashing import sha256_bytes
 from .io import InputError
-from .schema import Arms, Manifest, Oracle, RunRecord, SelectionConfig, TaskEntry, Thresholds
+from .schema import Arms, Manifest, Oracle, RunRecord, SearchCost, SelectionConfig, TaskEntry, Thresholds
 from .tasks import Task, load_tasks
 
 A2_SEED_OFFSET = 1000
@@ -54,6 +54,7 @@ class ExperimentConfig(BaseModel):
     eval_timeout_s: float = Field(60, gt=0)
     proposal_groups: list[str] | None = None
     selection: SelectionConfig = Field(default_factory=SelectionConfig)
+    search_cost: SearchCost | None = None
     thresholds: Thresholds = Field(default_factory=Thresholds)
 
 
@@ -320,8 +321,11 @@ class Runner:
             evaluator_hash=eh_before,
             evaluator_hash_after=eh_after,
             status=res.status if not sc.error else f"{res.status};eval_error",
-            usage=res.usage,
+            usage=res.usage.model_copy(update={"attempts": res.usage.attempts or 1}),
             events=res.events,
+            model_versions=res.model_versions,
+            decoding=res.decoding,
+            runtime=res.runtime,
         )
         (entry / "record.json").write_text(rec.model_dump_json(), encoding="utf-8")
         (entry / "detail.json").write_text(
@@ -373,6 +377,7 @@ class Runner:
             proposal_groups=c.proposal_groups,
             selection=c.selection,
             oracle=self.oracle(),
+            search_cost=c.search_cost,
             thresholds=c.thresholds,
             tasks=registry,
         )

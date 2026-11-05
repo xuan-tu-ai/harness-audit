@@ -40,6 +40,12 @@ selection:
   report_choice: fixed        # fixed | selected (round/config picked on the report split)
   n_compared: 1     # rows the reported configuration was chosen among
 
+# search_cost:      # compute spent finding the update, stated apart from the scored runs (optional;
+#   usd: 1.80       # undeclared -> a note in the report). Fill in real figures only.
+#   rollouts: 60
+#   candidates: 4
+#   notes: "proposal loop on the proposal split"
+
 oracle:             # how the scorer was kept out of the agent's reach
   outside_workspace: true   # hidden tests and reference solutions are not in the agent's workspace
   protected: ["(^|/)evaluator/", "test_hidden"]   # regexes; a traced tool call matching one touched the scorer

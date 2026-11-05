@@ -215,3 +215,46 @@ def test_tool_outcomes_from_hooks_and_result_blocks(tmp_path: Path, monkeypatch:
     res = asyncio.run(mod.ClaudeAgentSDKAdapter().run(req))
     ok = {e.summary: e.ok for e in res.events if e.type == "tool_call"}
     assert ok == {"python test_public.py": True, "python -c 'assert 0'": False, "ls": False, "pwd": None}
+
+
+def test_model_record_from_the_message_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Served model ids (main loop only), model requests incl. sub-agents, effort in effect and runtime."""
+    req = _req(tmp_path)
+
+    def assistant(model: str, mid: str | None, parent: str | None = None) -> object:
+        return sdk.AssistantMessage(content=[], model=model, message_id=mid, parent_tool_use_id=parent)
+
+    async def fake_query(*, prompt, options):
+        yield sdk.SystemMessage(subtype="init", data={"skills": [], "claude_code_version": "2.1.318"})
+        yield assistant("claude-haiku-5-5-20261001", "m1")
+        yield assistant("claude-haiku-5-5-20261001", "m1")  # a second block of the same response
+        pre = options.hooks["PreToolUse"][0].hooks[0]
+        await pre({"tool_name": "Bash", "tool_input": {"command": "ls"}, "effort": {"level": "low"}}, "t", None)
+        yield assistant("claude-small-sub-agent", "m2", parent="t")  # a sub-agent request: counted, not a main model
+        yield assistant("claude-haiku-5-5-20261001", None)
+        yield sdk.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=2,
+            session_id="s",
+            total_cost_usd=0.001,
+            usage={"input_tokens": 1, "output_tokens": 1},
+        )
+
+    monkeypatch.setattr(sdk, "query", fake_query)
+    res = asyncio.run(mod.ClaudeAgentSDKAdapter().run(req))
+    assert res.model_versions == ["claude-haiku-5-5-20261001"]
+    assert res.usage.model_calls == 3 and res.usage.attempts == 1
+    assert res.runtime.startswith("claude-code/2.1.318; claude-agent-sdk/")
+    assert res.decoding["effort_in_effect"] == ["low"] and res.decoding["max_turns"] == 20
+    assert "not settable" in res.decoding["temperature"]
+
+
+def test_served_models_fall_back_to_model_usage() -> None:
+    rec = mod.TraceRecorder.__new__(mod.TraceRecorder)
+    rec.main_models = []
+    msg = type("R", (), {"model_usage": {"claude-haiku-5-5-20261001": {}}})()
+    assert mod.served_models(rec, msg) == ["claude-haiku-5-5-20261001"]
+    assert mod.served_models(rec, None) is None

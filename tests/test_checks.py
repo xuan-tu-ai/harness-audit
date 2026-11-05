@@ -316,3 +316,60 @@ def test_undeclared_oracle_is_a_note() -> None:
     res = run_audit(records, m)
     assert res.check("oracle_integrity").status == Status.NOTE
     assert res.claim("Selection").verdict == Verdict.PASS
+
+
+# ---- Model record, envelope and search cost (report Table 5) ----------------------------------------
+
+
+def test_model_version_drift_fails_with_rubric_partial() -> None:
+    records, m = generate("model_version_drift")
+    res = run_audit(records, m)
+    assert res.check("model_record").status == Status.FAIL
+    assert res.claim("Attribution").verdict == Verdict.FAIL and res.claim("Attribution").rubric_grade == "O"
+
+
+def test_same_version_mix_in_both_arms_warns() -> None:
+    records, m = clean()
+    records = [r.model_copy(update={"model_versions": ["m-1"] if i % 2 else ["m-2"]}) for i, r in enumerate(records)]
+    res = run_audit(records, m)
+    assert res.check("model_record").status == Status.WARN and "several model versions" in res.check("model_record").reason
+
+
+def test_decoding_or_runtime_change_between_arms_warns() -> None:
+    records, m = clean()
+    hot = [r.model_copy(update={"decoding": {"effort": "high"}}) if r.arm == "B" else r for r in records]
+    assert run_audit(hot, m).check("model_record").status == Status.WARN
+    new_rt = [r.model_copy(update={"runtime": "rt/2"}) if r.arm == "B" else r for r in records]
+    res = run_audit(new_rt, m)
+    assert res.check("model_record").status == Status.WARN and "runtime differs" in res.check("model_record").reason
+
+
+def test_missing_model_record_is_a_note_only() -> None:
+    records, m = clean()
+    old = [r.model_copy(update={"model_versions": None, "decoding": None, "runtime": None}) for r in records]
+    res = run_audit(old, m)
+    ch = res.check("model_record")
+    assert ch.status == Status.NOTE and "Not recorded" in ch.reason
+    assert res.claim("Attribution").verdict == Verdict.PASS
+
+
+def test_envelope_grades_model_calls_and_names_unrecorded_fields() -> None:
+    records, m = clean()
+    more = [
+        r.model_copy(update={"usage": r.usage.model_copy(update={"model_calls": r.usage.model_calls * 2})}) if r.arm == "B" else r
+        for r in records
+    ]
+    ch = run_audit(more, m).check("envelope")
+    assert ch.status == Status.WARN and "model_calls ×2" in ch.reason
+    bare = [r.model_copy(update={"usage": r.usage.model_copy(update={"model_calls": None, "attempts": None})}) for r in records]
+    ch = run_audit(bare, m).check("envelope")
+    assert ch.status == Status.PASS and "Not recorded: model_calls, attempts" in ch.reason
+
+
+def test_search_cost_is_reported_apart_or_noted() -> None:
+    records, m = clean()
+    ch = run_audit(records, m).check("search_cost")
+    assert ch.status == Status.PASS and "$1.2500" in ch.reason and "Not part of the scored-run envelope" in ch.reason
+    m.search_cost = None
+    res = run_audit(records, m)
+    assert res.check("search_cost").status == Status.NOTE and res.claim("Attribution").verdict == Verdict.PASS
