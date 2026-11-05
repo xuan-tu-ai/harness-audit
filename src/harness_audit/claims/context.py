@@ -8,7 +8,7 @@ from functools import cached_property
 import numpy as np
 
 from .. import data
-from ..schema import CheckResult, ClaimResult, Manifest, RunRecord, Status, TaskEntry, Verdict
+from ..schema import ChangedArtifact, CheckResult, ClaimResult, Manifest, RunRecord, Status, TaskEntry, Verdict
 from ..stats import PairedEstimate, paired_estimate
 
 PRIMARY_SPLIT = "report"
@@ -45,6 +45,38 @@ class Context:
     @cached_property
     def groups(self) -> dict[str, str | None]:
         return data.group_of(self.reg)
+
+    @cached_property
+    def changed_artifacts(self) -> list[ChangedArtifact]:
+        """Declared changed artifacts, or (if none are declared) those seen only in the candidate's traces."""
+        if self.manifest.changed_artifacts:
+            return self.manifest.changed_artifacts
+        kinds = ("artifact_loaded", "artifact_reached", "artifact_carried")
+        seen_b: dict[str, str | None] = {}
+        seen_a: set[tuple[str, str | None]] = set()
+        for r in self.records:
+            for e in r.events or []:
+                if e.type not in kinds or not e.artifact:
+                    continue
+                if r.arm == self.B:
+                    seen_b.setdefault(e.artifact, e.hash)
+                elif r.arm == self.A:
+                    seen_a.add((e.artifact, e.hash))
+        a_names = {a for a, _ in seen_a}
+
+        def changed(path: str, h: str | None) -> bool:
+            return path not in a_names if h is None else (path, h) not in seen_a
+
+        inferred = [
+            ChangedArtifact(path=a, kind="skill" if "skills/" in a else "file", change="modified", hash_b=h)
+            for a, h in sorted(seen_b.items())
+            if changed(a, h)
+        ]
+        if inferred:
+            self.warnings.append(
+                "No changed artifacts declared; inferred from traces: " + ", ".join(a.path for a in inferred) + "."
+            )
+        return inferred
 
     @cached_property
     def proposal_groups(self) -> set[str]:
@@ -102,8 +134,8 @@ def make_claim(name: str, checks: list[CheckResult]) -> ClaimResult:
     if v == Verdict.PASS:
         summary = "All checks passed."
     elif v == Verdict.UNKNOWN:
-        missing = [c.title for c in checks if c.status == Status.SKIP]
-        summary = "Not enough data: " + "; ".join(missing) if missing else "Not enough data."
+        missing = [c.reason for c in checks if c.status == Status.SKIP]
+        summary = "Not enough data. " + " ".join(missing) if missing else "Not enough data."
     else:
         worst = Status.FAIL if v == Verdict.FAIL else Status.WARN
         bad = [c for c in checks if c.status == worst] or [c for c in checks if c.status == Status.SKIP]

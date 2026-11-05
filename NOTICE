@@ -1,0 +1,21 @@
+harness-audit
+Copyright 2026 Nguyễn Xuân Tự
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party material
+--------------------
+The evaluation criteria implemented by harness-audit, and the short quotations
+of them in the source code, README and generated reports, are taken from:
+
+  Wei, C., Guan, H., Zhu, M., Zhou, K., He, J., Zhou, X., Chen, H., Shen, Y.
+  "Self-Evolving Agent Harness", arXiv:2610.18813 (2026), and its companion
+  repository https://github.com/zgcagi/Harness-RSI
+  (docs/evidence-criteria.md, data/claim-audit-rubric.md, README.md §3.2).
+
+That material is licensed under the Creative Commons Attribution 4.0
+International License (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+Quotations are reproduced unmodified or lightly abridged; harness-audit's own
+operational rules (thresholds, check definitions, verdict mapping) are changes
+made by harness-audit and are not part of the original work. harness-audit is
+an independent implementation and is not endorsed by the original authors.

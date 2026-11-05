@@ -106,7 +106,13 @@ def test_confounds_and_missing_artifacts_warn() -> None:
     m.changed_artifacts = []
     res = run_audit(records, m)
     assert res.check("isolated_update").status == Status.WARN
-    assert res.claim("Activation").verdict == Verdict.UNKNOWN
+    # The skill is seen only in B's traces, so it is inferred as the changed artifact.
+    assert res.claim("Activation").verdict == Verdict.PASS
+    assert any("inferred from traces" in w for w in res.warnings)
+    for r in records:
+        if r.events is not None:
+            r.events = [e for e in r.events if e.type == "tool_call"]
+    assert run_audit(records, m).claim("Activation").verdict == Verdict.UNKNOWN
 
 
 def test_model_change_fails_attribution() -> None:

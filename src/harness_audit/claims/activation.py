@@ -64,7 +64,7 @@ def _rate(k: int, n: int) -> float:
 
 
 def audit_activation(ctx: Context) -> ClaimResult:
-    arts = ctx.manifest.changed_artifacts
+    arts = ctx.changed_artifacts
     b_runs = data.select(ctx.records, arm=ctx.B, split=PRIMARY_SPLIT)
     a_runs = data.select(ctx.records, arm=ctx.A, split=PRIMARY_SPLIT)
     checks: list[CheckResult] = []
@@ -75,7 +75,7 @@ def audit_activation(ctx: Context) -> ClaimResult:
                 id="reached_or_carried",
                 title="Reached or carried in scored runs",
                 status=Status.SKIP,
-                reason="The manifest declares no changed artifacts.",
+                reason="No changed artifacts are declared or visible in the traces.",
                 criterion=_CRIT_C,
             )
         )
