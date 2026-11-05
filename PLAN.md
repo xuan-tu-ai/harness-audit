@@ -269,3 +269,18 @@ fires everywhere does not pass the suite.
 6. **No API key in this session**: M4 cannot run here; the adapter's live path is exercised only by M4.
 7. **Nondeterminism**: no sampling seed exists, so replicates are independent draws; caching keys on the
    replicate index makes reruns reproducible from cache, not from the API.
+
+## 7. Status (end of the first session)
+
+| Milestone | Status |
+|---|---|
+| M0 | Done. |
+| M1 | Done: 8 synthetic scenarios (7 planted defects + clean) each caught by the intended check; manifest-driven checks covered in `tests/test_checks.py`. |
+| M2 | Done: `audit`, `report`, `synth`, `init`; Markdown/HTML/JSON; exit codes; `action.yml` (bash step simulated locally; first real Actions run pending). |
+| M3 | Done offline: runner, cache, budget guard, dry-run, A/A, Claude Agent SDK adapter tested with SDK message types and a fake `query()`. The adapter has **not** talked to the real CLI/API yet. |
+| M4 | Not started: no `ANTHROPIC_API_KEY` in this session. The cloud container also exports `ANTHROPIC_BASE_URL` and host session credentials; the adapter blanks them for the CLI subprocess and refuses any `apiKeySource` other than `ANTHROPIC_API_KEY`. |
+| M5 | Done except the real-run report and its screenshot (README marks them TBD). |
+
+Design consequence found while building `examples/`: with 5 admission tasks the gate is unattainable
+(`ε = 1.095 > 1`), and 4 held-out-group report tasks cannot reach p < 0.05 with the exact sign-flip test.
+Expanding the task set before M4 would let those two checks pass when the effect is real.

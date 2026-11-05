@@ -32,7 +32,11 @@ def _detail_rows(ch: CheckResult) -> tuple[list[str], list[list[str]]] | None:
     """Optional small table of key numbers for a check (shared by Markdown and HTML)."""
     m = ch.metrics
     if ch.id == "envelope" and "per_task_means" in m:
-        rows = [[k, _f(v["A"], 1), _f(v["B"], 1), _f(v["ratio_B_over_A"], 2)] for k, v in m["per_task_means"].items()]
+        nd = {"cost_usd": 5, "wall_s": 1}
+        rows = [
+            [k, _f(v["A"], nd.get(k, 1)), _f(v["B"], nd.get(k, 1)), _f(v["ratio_B_over_A"], 2)]
+            for k, v in m["per_task_means"].items()
+        ]
         return ["per-task mean", "A", "B", "B / A"], rows
     if ch.id == "reached_or_carried" and "per_artifact" in m:
         rows = [
@@ -62,7 +66,7 @@ def _detail_rows(ch: CheckResult) -> tuple[list[str], list[list[str]]] | None:
         ]
         return ["group", "role", "tasks", "score A", "score B", "Δ", "CI"], rows
     if ch.id == "admission_gate" and "epsilon" in m:
-        return ["split", "m tasks", "Δ̂ loss", "ε", "Δ̂ + ε", "K", "T", "δ"], [
+        return ["split", "m tasks", "mean Δ loss", "ε", "bound", "K", "T", "δ"], [
             [
                 m["split"],
                 str(m["m_tasks"]),

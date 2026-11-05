@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: uv sync --all-extras
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Test
+        run: uv run pytest -q
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Make synthetic data
+        run: |
+          python -m pip install --quiet .
+          harness-audit synth --scenario clean --out synth-clean
+          harness-audit synth --scenario evaluator_changed --out synth-bad
+      - name: Audit clean data (must pass)
+        uses: ./
+        with:
+          runs: synth-clean/runs.jsonl
+          manifest: synth-clean/manifest.yaml
+          out: report-clean
+      - name: Audit defective data (must fail)
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          runs: synth-bad/runs.jsonl
+          manifest: synth-bad/manifest.yaml
+          out: report-bad
+      - name: Check exit code
+        env:
+          CODE: ${{ steps.bad.outputs.exit-code }}
+        run: test "$CODE" = "1"

@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use harness-audit, please cite it as below, and cite the paper whose criteria it implements."
+title: "harness-audit: evidence checks for agent-harness updates"
+type: software
+authors:
+  - family-names: "Nguyễn"
+    given-names: "Xuân Tự"
+    email: nxuantu36@gmail.com
+version: 0.1.0
+license: Apache-2.0
+repository-code: "https://github.com/xuan-tu-ai/harness-audit"
+keywords:
+  - agents
+  - evaluation
+  - agent harness
+  - claude-agent-sdk
+references:
+  - type: article
+    title: "Self-Evolving Agent Harness"
+    authors:
+      - family-names: Wei
+        given-names: Chuyang
+      - family-names: Guan
+        given-names: Haoxiang
+      - family-names: Zhu
+        given-names: Minghang
+      - family-names: Zhou
+        given-names: Kexin
+      - family-names: He
+        given-names: Jiyan
+      - family-names: Zhou
+        given-names: Xiren
+      - family-names: Chen
+        given-names: Huanhuan
+      - family-names: Shen
+        given-names: Yifei
+    year: 2026
+    identifiers:
+      - type: other
+        value: "arXiv:2610.18813"
+    url: "https://arxiv.org/abs/2610.18813"
+    repository: "https://github.com/zgcagi/Harness-RSI"
+    license: CC-BY-4.0
