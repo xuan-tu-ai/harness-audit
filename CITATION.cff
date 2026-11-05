@@ -41,3 +41,4 @@ references:
     url: "https://arxiv.org/abs/2610.18813"
     repository: "https://github.com/zgcagi/Harness-RSI"
     license: CC-BY-4.0
+    notes: "The four claims, Eq. 11 activation rates and Table 5 controls are defined in the companion technical report 'Harness Self-Evolution: Theory, Algorithms, Evaluation, Applications, and Impact', https://openreview.net/pdf?id=m5jsFGXUM2"

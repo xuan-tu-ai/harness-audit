@@ -39,18 +39,24 @@ def _detail_rows(ch: CheckResult) -> tuple[list[str], list[list[str]]] | None:
         ]
         return ["per-task mean", "A", "B", "B / A"], rows
     if ch.id == "reached_or_carried" and "per_artifact" in m:
+
+        def cell(count: object, rate: object) -> str:
+            return f"{count} ({_f(rate, 2)})" if rate is not None else f"{count} (undefined)"
+
         rows = [
             [
                 p,
-                str(d["available"]),
-                str(d["reached"]),
-                str(d["carried"]),
+                str(d["applicable"]),
+                cell(d["available"], d["load_rate"]),
+                cell(d["reached"], d["reach_rate"]),
+                cell(d["carried"], d["carry_rate"]),
                 _f(d.get("signature_rate_A"), 2),
                 _f(d.get("signature_rate_B"), 2),
             ]
             for p, d in m["per_artifact"].items()
         ]
-        return ["artifact", "available", "reached", "carried", "signature rate A", "signature rate B"], rows
+        head = ["artifact", "applicable runs", "load", "reach", "carry", "signature rate A", "signature rate B"]
+        return head, rows
     if ch.id == "heldout_gain" and "per_group" in m:
         rows = [
             [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from harness_audit.audit import run_audit
+from harness_audit.report import to_markdown
 from harness_audit.schema import Status, TaskEntry, Verdict
 from harness_audit.synth import generate
 
@@ -244,7 +245,7 @@ def test_system_prompt_carried_by_adherence_signature() -> None:
             ]
     ch = run_audit(records, m).check("reached_or_carried")
     assert ch.status == Status.PASS
-    assert ch.metrics["per_artifact"]["system_prompt.md"]["carried_rate"] > 0.5
+    assert ch.metrics["per_artifact"]["system_prompt.md"]["carry_rate"] > 0.5
 
 
 def test_per_task_evaluators_are_allowed() -> None:
@@ -252,3 +253,66 @@ def test_per_task_evaluators_are_allowed() -> None:
     for r in records:
         r.evaluator_hash = "sha256:eval-" + r.task_id
     assert run_audit(records, m).check("same_evaluator").status == Status.PASS
+
+
+# ---- Activation rates (report Eq. 11) ---------------------------------------------------------------
+
+
+def test_activation_rates_use_the_applicable_runs_as_denominator() -> None:
+    records, m = clean()
+    m.changed_artifacts[0].applies_to = ["strings"]
+    per = run_audit(records, m).check("reached_or_carried").metrics["per_artifact"]["skills/python-bugfix/SKILL.md"]
+    assert per["applicable"] == "45/90"  # 15 string tasks x 3 seeds of the 30 report tasks
+    assert per["available"].endswith("/45") and per["reached"].endswith("/45")
+    k_l, k_b = int(per["available"].split("/")[0]), int(per["reached"].split("/")[0])
+    assert per["load_rate"] == round(k_l / 45, 4) and per["reach_rate"] == round(k_b / 45, 4)
+    k_c, rest = per["carried"].split("/")
+    assert rest == f"{k_l} loaded" and per["carry_rate"] == round(int(k_c) / k_l, 4)
+
+
+def test_executable_update_carry_is_conditioned_on_reach() -> None:
+    records, m = clean()
+    m.changed_artifacts[0].kind = "code"
+    per = run_audit(records, m).check("reached_or_carried").metrics["per_artifact"]["skills/python-bugfix/SKILL.md"]
+    k_b = int(per["reached"].split("/")[0])
+    assert per["carry_denominator"] == "reached" and per["carried"].endswith(f"/{k_b} reached")
+
+
+def test_rates_are_undefined_not_zero_when_nothing_applies() -> None:
+    records, m = clean()
+    m.changed_artifacts[0].applies_to = ["no-such-group"]
+    res = run_audit(records, m)
+    per = res.check("reached_or_carried").metrics["per_artifact"]["skills/python-bugfix/SKILL.md"]
+    assert per["applicable"] == "0/90" and per["load_rate"] is None and per["carry_rate"] is None
+    # Existence is still judged over every scored run, and the low-reach note does not fire on an undefined rate.
+    assert res.check("reached_or_carried").status == Status.PASS
+    assert res.check("gain_without_activation").status == Status.PASS
+    assert "undefined" in to_markdown(res)
+
+
+# ---- Oracle integrity (report Table 5) --------------------------------------------------------------
+
+
+def test_evaluator_changed_during_a_run_fails() -> None:
+    records, m = clean()
+    records[5] = records[5].model_copy(update={"evaluator_hash_after": "sha256:" + "0" * 64})
+    res = run_audit(records, m)
+    assert res.check("oracle_integrity").status == Status.FAIL
+    assert res.claim("Selection").verdict == Verdict.FAIL
+    assert res.claim("Selection").rubric_grade == "C"
+
+
+def test_scorer_inside_workspace_warns() -> None:
+    records, m = clean()
+    m.oracle.outside_workspace = False
+    assert run_audit(records, m).check("oracle_integrity").status == Status.WARN
+
+
+def test_undeclared_oracle_is_a_note() -> None:
+    records, m = clean()
+    m.oracle.outside_workspace = None
+    m.oracle.protected = []
+    records = [r.model_copy(update={"evaluator_hash_after": None}) for r in records]
+    res = run_audit(records, m)
+    assert res.check("oracle_integrity").status == Status.NOTE
+    assert res.claim("Selection").verdict == Verdict.PASS

@@ -11,6 +11,7 @@ The admission gate is the paper's §3.2 rule ``Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0
 from __future__ import annotations
 
 import math
+import re
 
 from .. import data
 from ..schema import CheckResult, ClaimResult, Status, TaskEntry
@@ -207,6 +208,7 @@ def audit_selection(ctx: Context) -> ClaimResult:
         )
 
     checks.append(_gate_check(ctx, admission, proposal))
+    checks.append(oracle_check(ctx))
     return make_claim("Selection", checks)
 
 
@@ -279,3 +281,85 @@ def _gate_check(ctx: Context, admission: list[TaskEntry], proposal: list[TaskEnt
         if not g.passed
         else f"Gate cleared numerically, but{fresh_note}",
     )
+
+
+def oracle_check(ctx: Context) -> CheckResult:
+    """Oracle integrity (report Table 5): scoring code lies outside what a candidate can edit or probe.
+
+    FAIL when a run changed the evaluator (hash re-read after the agent ran differs);
+    WARN when a traced tool call touched a protected scorer path, or the scorer is declared
+    to sit inside the workspace; NOTE when nothing was declared or recorded.
+    """
+    title = "Oracle integrity (scorer out of the agent's reach)"
+    crit = "scoring, verification and bookkeeping code lie outside what a candidate can edit or repeatedly probe"
+    oracle = ctx.manifest.oracle
+    recs = ctx.records
+    with_after = [r for r in recs if r.evaluator_hash_after is not None]
+    changed = [r.run_id for r in with_after if r.evaluator_hash_after != r.evaluator_hash]
+    pats = []
+    for pat in oracle.protected:
+        try:
+            pats.append(re.compile(pat))
+        except re.error:
+            ctx.warnings.append(f"oracle.protected: invalid regex {pat!r} ignored")
+    traced = [r for r in recs if r.events is not None]
+    touched: dict[str, int] = {}
+    examples: list[str] = []
+    if pats:
+        for r in traced:
+            hits = [
+                e.summary
+                for e in r.events or []
+                if e.type == "tool_call" and e.summary and any(p.search(e.summary) for p in pats)
+            ]
+            if hits:
+                touched[r.arm] = touched.get(r.arm, 0) + 1
+                if len(examples) < 3:
+                    examples.append(f"{r.run_id}: {hits[0]}")
+    metrics = {
+        "outside_workspace": oracle.outside_workspace,
+        "evaluator_rechecked": f"{len(with_after)}/{len(recs)} runs",
+        "evaluator_changed_by_run": len(changed),
+        "protected_patterns": oracle.protected,
+        "traced_runs_scanned": len(traced) if pats else 0,
+        "runs_touching_scorer_by_arm": touched,
+        "examples": examples,
+    }
+
+    def res(st: Status, why: str) -> CheckResult:
+        return CheckResult(
+            id="oracle_integrity",
+            title=title,
+            status=st,
+            reason=why,
+            rubric=False,
+            required=False,
+            criterion=crit,
+            metrics=metrics,
+        )
+
+    if changed:
+        return res(
+            Status.FAIL,
+            f"The evaluator changed during {len(changed)} run(s) (e.g. {changed[0]}): the score measures an edited scorer.",
+        )
+    if touched:
+        by_arm = ", ".join(f"{k}: {v}" for k, v in sorted(touched.items()))
+        return res(Status.WARN, f"Traced tool calls touched protected scorer paths in runs ({by_arm}), e.g. {examples[0]}.")
+    if oracle.outside_workspace is False:
+        return res(
+            Status.WARN, "The scorer is declared to sit inside the agent's workspace, where a candidate can edit or probe it."
+        )
+    evidence = []
+    if oracle.outside_workspace:
+        evidence.append("scorer declared outside the agent's workspace")
+    if with_after:
+        evidence.append(f"evaluator unchanged after {len(with_after)}/{len(recs)} runs")
+    if pats and traced:
+        evidence.append(f"no tool call matched the protected scorer paths in {len(traced)} traced runs")
+    if not evidence:
+        return res(
+            Status.NOTE,
+            "Not recorded: declare `oracle.outside_workspace` and `oracle.protected`, or record `evaluator_hash_after`.",
+        )
+    return res(Status.PASS, "; ".join(evidence).capitalize() + ".")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import tempfile
 from collections import Counter
@@ -26,7 +27,7 @@ from .evaluator import evaluator_hash, score_workspace
 from .harness import Harness, diff_harnesses, load_harness
 from .hashing import sha256_bytes
 from .io import InputError
-from .schema import Arms, Manifest, RunRecord, SelectionConfig, TaskEntry, Thresholds
+from .schema import Arms, Manifest, Oracle, RunRecord, SelectionConfig, TaskEntry, Thresholds
 from .tasks import Task, load_tasks
 
 A2_SEED_OFFSET = 1000
@@ -284,6 +285,7 @@ class Runner:
     async def _run_job(self, j: Job, budget: float) -> RunRecord:
         c = self.exp.config
         work = self._workdir()
+        eh_before = evaluator_hash(j.task)
         try:
             shutil.copytree(j.task.workspace, work, dirs_exist_ok=True)
             req = RunRequest(j.task, j.harness, work, j.seed, c.model, budget, c.timeout_s)
@@ -293,6 +295,7 @@ class Runner:
                 raise
             except Exception as e:  # noqa: BLE001 - one broken run must not lose the others
                 res = AdapterResult(status="error", error=f"{type(e).__name__}: {str(e)[:300]}")
+            eh_after = evaluator_hash(j.task)  # before scoring: did the agent's run touch the scorer?
             for p in self.adapter.installed_paths():
                 shutil.rmtree(work / p, ignore_errors=True)
             entry = self._entry(j)
@@ -314,7 +317,8 @@ class Runner:
             seed=j.seed,
             model=res.model or c.model,
             score=sc.score,
-            evaluator_hash=evaluator_hash(j.task),
+            evaluator_hash=eh_before,
+            evaluator_hash_after=eh_after,
             status=res.status if not sc.error else f"{res.status};eval_error",
             usage=res.usage,
             events=res.events,
@@ -340,7 +344,14 @@ class Runner:
         if not final.exists():
             return r
         sc = score_workspace(j.task, final, self.exp.config.eval_timeout_s)
-        r = r.model_copy(update={"score": sc.score, "evaluator_hash": eh})
+        # A deliberate evaluator change between experiments is not tampering: carry the run's own
+        # before/after verdict over to the new hash, keeping a mismatch if the run changed the scorer.
+        before, after = r.evaluator_hash, r.evaluator_hash_after
+        if after in (None, before):
+            after = after and eh
+        elif after == eh:  # the scorer now on disk is the one this run left behind
+            after = before
+        r = r.model_copy(update={"score": sc.score, "evaluator_hash": eh, "evaluator_hash_after": after})
         (self._entry(j) / "record.json").write_text(r.model_dump_json(), encoding="utf-8")
         return r
 
@@ -361,6 +372,14 @@ class Runner:
             confounds=confounds,
             proposal_groups=c.proposal_groups,
             selection=c.selection,
+            oracle=self.oracle(),
             thresholds=c.thresholds,
             tasks=registry,
         )
+
+    def oracle(self) -> Oracle:
+        """Hidden tests and references are copied in only after the agent finishes; flag any trace that names them."""
+        names = sorted({f.name for t in self.exp.all_tasks for f in t.evaluator_dir.rglob("*") if f.is_file()})
+        names = [n for n in names if not n.endswith(".pyc")]
+        protected = [r"(^|[/\\\s])evaluator[/\\]"] + [r"(^|[/\\\s'\"])" + re.escape(n) + r"\b" for n in names]
+        return Oracle(outside_workspace=True, protected=protected)

@@ -17,6 +17,7 @@ from .schema import (
     ChangedArtifact,
     Event,
     Manifest,
+    Oracle,
     RunRecord,
     SelectionConfig,
     Signature,
@@ -33,6 +34,7 @@ SCENARIOS: dict[str, str] = {
     "same_group_only": "B improves only on the task group that formed the update.",
     "retention_regression": "B regresses on the retention (earlier) tasks.",
     "no_traces": "No traces were collected, so Activation cannot be judged.",
+    "oracle_touched": "Some B runs read the hidden tests that score them.",
 }
 
 SKILL = "skills/python-bugfix/SKILL.md"
@@ -120,6 +122,7 @@ def generate(scenario: str = "clean", seed: int = 0, seeds: int = 3) -> tuple[li
         selection=SelectionConfig(
             K=1, T=1, delta=0.05, admission_data="admission", report_uses=1, report_choice="fixed", n_compared=1
         ),
+        oracle=Oracle(outside_workspace=True, protected=[r"(^|[/\s])evaluator/", r"test_hidden\.py"]),
         tasks=registry,
     )
     return records, manifest
@@ -168,6 +171,10 @@ def _run(rng: np.random.Generator, scenario: str, t: _Task, arm: str, s: int) ->
         events.append(Event(t=2.0, type="artifact_reached", artifact=SKILL, evidence="Skill tool invoked: python-bugfix"))
         events.append(Event(t=2.0, type="tool_call", name="Skill", args_hash=_h("skill"), summary="python-bugfix"))
     events.append(Event(t=4.0, type="tool_call", name="Edit", args_hash=_h(f"{t.task_id}e"), summary="buggy.py"))
+    if is_b and scenario == "oracle_touched" and rng.random() < 0.3:
+        events.append(
+            Event(t=3.0, type="tool_call", name="Bash", args_hash=_h("peek"), summary="cat ../evaluator/test_hidden.py")
+        )
     if carried or (not is_b and rng.random() < 0.25):
         events.append(Event(t=6.0, type="tool_call", name="Bash", args_hash=_h("test"), summary="python test_public.py"))
     if scenario == "no_traces":
@@ -185,6 +192,7 @@ def _run(rng: np.random.Generator, scenario: str, t: _Task, arm: str, s: int) ->
         model=MODEL,
         score=score,
         evaluator_hash=EVAL_OTHER if (is_b and scenario == "evaluator_changed") else EVAL,
+        evaluator_hash_after=EVAL_OTHER if (is_b and scenario == "evaluator_changed") else EVAL,
         usage=usage,
         events=events,
     )

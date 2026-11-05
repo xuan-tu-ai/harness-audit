@@ -187,3 +187,44 @@ def test_cli_run_end_to_end_with_fake_adapter(exp_dir: Path) -> None:
     assert "from cache" in r.output
     r2 = CliRunner().invoke(app, args)
     assert "on 0 new runs" in r2.output
+
+
+def test_runner_records_oracle_integrity(exp_dir: Path, tmp_path: Path) -> None:
+    exp = load_experiment(exp_dir / "experiment.yaml", seeds=1)
+    r = Runner(exp, cache_dir=tmp_path / "cache", adapter=FakeAdapter())
+    recs = r.execute(r.plan(), max_cost=100)
+    assert all(x.evaluator_hash_after == x.evaluator_hash for x in recs)
+    m = r.manifest()
+    assert m.oracle.outside_workspace and m.oracle.protected
+    assert run_audit(recs, m).check("oracle_integrity").status.value == "pass"
+
+
+def test_agent_that_edits_the_scorer_is_caught(exp_dir: Path, tmp_path: Path) -> None:
+    class Tamper(FakeAdapter):
+        async def run(self, req):  # type: ignore[no-untyped-def]
+            res = await super().run(req)
+            hidden = req.task.evaluator_dir / "test_hidden.py"
+            hidden.write_text(hidden.read_text() + "\n# touched\n")
+            return res
+
+    exp = load_experiment(exp_dir / "experiment.yaml", seeds=1)
+    r = Runner(exp, cache_dir=tmp_path / "cache", adapter=Tamper(), concurrency=1)
+    plan = [j for j in r.plan() if j.task.id == "legacy/factorial"]
+    recs = r.execute(plan, max_cost=100)
+    assert recs and all(x.evaluator_hash_after != x.evaluator_hash for x in recs)
+    assert run_audit(recs, r.manifest()).check("oracle_integrity").status.value == "fail"
+    # Re-scoring after a deliberate evaluator change keeps the run's own tampering on record.
+    r2 = Runner(load_experiment(exp_dir / "experiment.yaml", seeds=1), cache_dir=tmp_path / "cache", adapter=FakeAdapter())
+    again = r2.execute([j for j in r2.plan() if j.task.id == "legacy/factorial"], max_cost=0.001)
+    assert all(x.evaluator_hash_after != x.evaluator_hash for x in again)
+
+
+def test_harness_yaml_declares_applicability(tmp_path: Path) -> None:
+    b = tmp_path / "b"
+    shutil.copytree(EXAMPLES / "harness_b", b)
+    cfg = yaml.safe_load((b / "harness.yaml").read_text())
+    cfg["applies_to"] = {"skills/python-bugfix/SKILL.md": ["strings", "numbers/*"]}
+    (b / "harness.yaml").write_text(yaml.safe_dump(cfg))
+    arts, confounds = diff_harnesses(load_harness(EXAMPLES / "harness_a"), load_harness(b))
+    assert arts[0].applies_to == ["strings", "numbers/*"] and confounds == []
+    assert arts[0].applies("numbers/clamp", "numbers") and not arts[0].applies("collections/chunk", "collections")

@@ -6,6 +6,7 @@ The core schema is framework-independent: any agent framework can export
 
 from __future__ import annotations
 
+import fnmatch
 from enum import Enum
 from typing import Any, Literal
 
@@ -61,6 +62,8 @@ class RunRecord(_Model):
     model: str
     score: float
     evaluator_hash: str
+    evaluator_hash_after: str | None = None
+    """Evaluator hash re-read after the agent ran; differs from ``evaluator_hash`` if the run changed the scorer."""
     status: str = "ok"
     usage: Usage | None = None
     events: list[Event] | None = None
@@ -92,11 +95,40 @@ class ChangedArtifact(_Model):
     hash_a: str | None = None
     hash_b: str | None = None
     signatures: list[Signature] = Field(default_factory=list)
+    applies_to: list[str] | None = Field(
+        None,
+        description="task ids or task groups (glob patterns) where this update is meant to apply, declared before "
+        "seeing outcomes; None means every scored run. The denominator of the load and reach rates (Eq. 11).",
+    )
 
     @property
     def carried_requires_reached(self) -> bool:
         """Interpreted guidance in a system prompt has no 'reached' event of its own."""
         return self.kind not in ("system_prompt", "config")
+
+    @property
+    def executable(self) -> bool:
+        """Executable paths condition carry on reach; interpreted guidance conditions it on load (Eq. 11)."""
+        return self.kind in ("tool", "code")
+
+    def applies(self, task_id: str, group: str | None) -> bool:
+        """Whether a run on this task falls under the declared applicability rule."""
+        if self.applies_to is None:
+            return True
+        keys = [task_id] + ([group] if group else [])
+        return any(fnmatch.fnmatchcase(k, pat) for pat in self.applies_to for k in keys)
+
+
+class Oracle(_Model):
+    """How the scorer was kept out of the candidate's reach (Table 5, oracle integrity)."""
+
+    outside_workspace: bool | None = Field(
+        None, description="hidden tests, reference solutions and scoring code are not in the agent's workspace"
+    )
+    protected: list[str] = Field(
+        default_factory=list,
+        description="regex patterns; a traced tool call whose summary matches one touched the scorer",
+    )
 
 
 class Arms(_Model):
@@ -146,6 +178,7 @@ class Manifest(_Model):
     confounds: list[str] = Field(default_factory=list)
     proposal_groups: list[str] | None = None
     selection: SelectionConfig = Field(default_factory=SelectionConfig)
+    oracle: Oracle = Field(default_factory=Oracle)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     tasks: list[TaskEntry] = Field(default_factory=list)
 

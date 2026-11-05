@@ -26,6 +26,7 @@ EXPECTED: dict[str, tuple[dict[str, Verdict], dict[str, Status]]] = {
     "same_group_only": ({"Improvement": Verdict.PARTIAL}, {"heldout_gain": Status.WARN}),
     "retention_regression": ({"Improvement": Verdict.FAIL}, {"retention": Status.FAIL}),
     "no_traces": ({"Activation": Verdict.UNKNOWN}, {"reached_or_carried": Status.SKIP}),
+    "oracle_touched": ({"Selection": Verdict.PARTIAL}, {"oracle_integrity": Status.WARN}),
 }
 
 
@@ -83,8 +84,18 @@ def test_activation_coverage_is_recorded(results: dict[str, AuditResult]) -> Non
     ch = results["clean"].check("reached_or_carried")
     assert ch.metrics["coverage"].endswith("/90 scored runs")
     per = ch.metrics["per_artifact"]["skills/python-bugfix/SKILL.md"]
-    assert per["reached_rate"] > 0.8
+    assert per["applicable"] == "90/90" and per["reach_rate"] > 0.8
+    assert per["carry_denominator"] == "loaded" and per["carried"].endswith("/90 loaded")
     assert per["signature_rate_A"] is not None and per["signature_rate_A"] < per["signature_rate_B"]
+
+
+def test_oracle_touch_does_not_change_the_rubric_grade(results: dict[str, AuditResult]) -> None:
+    # Oracle integrity is a harness-audit control from the report's Table 5, outside the survey rubric.
+    sel = results["oracle_touched"].claim("Selection")
+    assert sel.rubric_grade == "C"
+    ch = results["oracle_touched"].check("oracle_integrity")
+    assert set(ch.metrics["runs_touching_scorer_by_arm"]) == {"B"}
+    assert results["clean"].check("oracle_integrity").status == Status.PASS
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

@@ -34,6 +34,9 @@ class HarnessConfig(BaseModel):
     thinking: str | None = None
     skills_dir: str = "skills"
     signatures: dict[str, list[Signature]] = Field(default_factory=dict)
+    applies_to: dict[str, list[str]] = Field(
+        default_factory=dict, description="artifact path -> task ids or groups (globs) where the update is meant to apply"
+    )
 
 
 @dataclass
@@ -89,12 +92,21 @@ def diff_harnesses(a: Harness, b: Harness) -> tuple[list[ChangedArtifact], list[
             continue
         change = "added" if ha is None else "removed" if hb is None else "modified"
         sigs = b.config.signatures.get(path, [])
+        scope = b.config.applies_to.get(path)
         arts.append(
-            ChangedArtifact(path=path, kind=_kind(b if hb else a, path), change=change, hash_a=ha, hash_b=hb, signatures=sigs)
-        )  # type: ignore[arg-type]
+            ChangedArtifact(
+                path=path,
+                kind=_kind(b if hb else a, path),  # type: ignore[arg-type]
+                change=change,  # type: ignore[arg-type]
+                hash_a=ha,
+                hash_b=hb,
+                signatures=sigs,
+                applies_to=scope,
+            )
+        )
     confounds: list[str] = []
-    ca = a.config.model_dump(exclude={"name", "signatures"})
-    cb = b.config.model_dump(exclude={"name", "signatures"})
+    ca = a.config.model_dump(exclude={"name", "signatures", "applies_to"})
+    cb = b.config.model_dump(exclude={"name", "signatures", "applies_to"})
     for key in sorted(ca):
         if ca[key] == cb[key]:
             continue

@@ -59,8 +59,44 @@ def _any_sig(run: RunRecord, art: ChangedArtifact) -> bool:
     return any(_sig_match(e, art) for e in (run.events or []))
 
 
-def _rate(k: int, n: int) -> float:
-    return round(k / n, 4) if n else 0.0
+def _rate(k: int, n: int) -> float | None:
+    """A rate with a zero denominator is undefined, not zero (Eq. 11): report the counts instead."""
+    return round(k / n, 4) if n else None
+
+
+def _applicable(runs: Iterable[RunRecord], art: ChangedArtifact) -> list[RunRecord]:
+    return [r for r in runs if art.applies(r.task_id, r.task_group)]
+
+
+def artifact_rates(traced: list[RunRecord], art: ChangedArtifact) -> dict[str, object]:
+    """Load, reach and carry rates of one update over the scored runs where it applies (paper Eq. 11).
+
+    ``R(u)``: scored runs satisfying the declared applicability rule; ``load = |L|/|R|``,
+    ``reach = |B|/|R|``; ``carry = |C|/|L|`` for interpreted guidance and ``|C|/|B|`` for
+    executable paths.
+    """
+    runs = _applicable(traced, art)
+    g = [grades(r, art) for r in runs]
+    n_r = len(runs)
+    k_l = sum(x["available"] for x in g)
+    k_b = sum(x["reached"] for x in g)
+    if art.executable:
+        base, k_base = "reached", k_b
+        k_c = sum(x["carried"] and x["reached"] for x in g)
+    else:
+        base, k_base = "loaded", k_l
+        k_c = sum(x["carried"] and x["available"] for x in g)
+    return {
+        "applicable": f"{n_r}/{len(traced)}",
+        "applies_to": art.applies_to,
+        "available": f"{k_l}/{n_r}",
+        "reached": f"{k_b}/{n_r}",
+        "carried": f"{k_c}/{k_base} {base}",
+        "load_rate": _rate(k_l, n_r),
+        "reach_rate": _rate(k_b, n_r),
+        "carry_rate": _rate(k_c, k_base),
+        "carry_denominator": base,
+    }
 
 
 def audit_activation(ctx: Context) -> ClaimResult:
@@ -95,31 +131,26 @@ def audit_activation(ctx: Context) -> ClaimResult:
         return make_claim("Activation", checks)
 
     n = len(traced)
+    a_traced = [r for r in a_runs if r.events]
     per_art: dict[str, dict[str, object]] = {}
     act_by_run: dict[str, bool] = {r.run_id: False for r in traced}
+    operated: list[str] = []
     for art in arts:
-        g = [grades(r, art) for r in traced]
-        k_av = sum(x["available"] for x in g)
-        k_re = sum(x["reached"] for x in g)
-        k_ca = sum(x["carried"] for x in g)
-        for r, x in zip(traced, g, strict=True):
-            act_by_run[r.run_id] |= x["reached"] or x["carried"]
+        hit = False
+        for r in traced:
+            x = grades(r, art)
+            if x["reached"] or x["carried"]:
+                act_by_run[r.run_id] = hit = True
+        if hit:
+            operated.append(art.path)
         other = [r for r in ctx.records if r.arm == ctx.B and r.split != PRIMARY_SPLIT and r.events]
+        app_b, app_a = _applicable(traced, art), _applicable(a_traced, art)
         per_art[art.path] = {
             "kind": art.kind,
-            "available": f"{k_av}/{n}",
-            "reached": f"{k_re}/{n}",
-            "carried": f"{k_ca}/{n}",
-            "available_rate": _rate(k_av, n),
-            "reached_rate": _rate(k_re, n),
-            "carried_rate": _rate(k_ca, n),
+            **artifact_rates(traced, art),
             "signatures": [s.model_dump() for s in art.signatures],
-            "signature_rate_B": _rate(sum(_any_sig(r, art) for r in traced), n) if art.signatures else None,
-            "signature_rate_A": (
-                _rate(sum(_any_sig(r, art) for r in a_runs if r.events), len([r for r in a_runs if r.events]))
-                if art.signatures
-                else None
-            ),
+            "signature_rate_B": _rate(sum(_any_sig(r, art) for r in app_b), len(app_b)) if art.signatures else None,
+            "signature_rate_A": _rate(sum(_any_sig(r, art) for r in app_a), len(app_a)) if art.signatures else None,
             "reached_outside_primary": sum(grades(r, art)["reached"] for r in other),
         }
 
@@ -134,7 +165,7 @@ def audit_activation(ctx: Context) -> ClaimResult:
             criterion="availability is the weakest grade; load rates alone are O",
             metrics={
                 "per_artifact": {
-                    p: {k: v for k, v in d.items() if k in ("available", "available_rate")} for p, d in per_art.items()
+                    p: {k: v for k, v in d.items() if k in ("applicable", "available", "load_rate")} for p, d in per_art.items()
                 }
             },
         )
@@ -144,8 +175,7 @@ def audit_activation(ctx: Context) -> ClaimResult:
     coverage = f"{k_act}/{n} scored runs"
     metrics = {"coverage": coverage, "n_traced": n, "n_scored_runs": len(b_runs), "per_artifact": per_art}
     if k_act > 0:
-        names = [p for p, d in per_art.items() if d["reached_rate"] or d["carried_rate"]]
-        st, why = Status.PASS, f"Reached or carried in {coverage} ({', '.join(names)})."
+        st, why = Status.PASS, f"Reached or carried in {coverage} ({', '.join(operated)})."
     elif k_any_av > 0:
         st, why = Status.WARN, f"Changed artifacts were loaded in {k_any_av}/{n} scored runs but never reached or carried."
     else:
@@ -162,7 +192,9 @@ def audit_activation(ctx: Context) -> ClaimResult:
     )
 
     checks.append(_baseline_clean(ctx, a_runs, arts))
-    checks.extend(_conditional(ctx, traced, a_runs, act_by_run, k_act, n))
+    applicable = [r for r in traced if any(a.applies(r.task_id, r.task_group) for a in arts)]
+    k_app = sum(act_by_run[r.run_id] for r in applicable)
+    checks.extend(_conditional(ctx, traced, a_runs, act_by_run, k_app, len(applicable)))
     return make_claim("Activation", checks)
 
 
@@ -239,13 +271,13 @@ def _conditional(
         )
     ]
 
-    rate = k_act / n if n else 0.0
+    rate = _rate(k_act, n)
     gain = ctx.gain_is_significant()
-    flag_low = gain and rate < ctx.th.low_reach
+    flag_low = gain and rate is not None and rate < ctx.th.low_reach
     flag_off = gain and d_off is not None and d_on is not None and len(off) >= 2 and d_off >= d_on
     if flag_low or flag_off:
         why = (
-            f"Improvement not via the update path: the update was activated in {rate:.0%} of scored runs "
+            f"Improvement not via the update path: the update was activated in {k_act}/{n} applicable scored runs "
             f"(threshold {ctx.th.low_reach:.0%}) while the score gain is significant."
             if flag_low
             else "Improvement not via the update path: runs where the update was not activated gain as much as runs where it was."
@@ -258,7 +290,7 @@ def _conditional(
                 rubric=False,
                 required=False,
                 reason=why,
-                metrics={"activation_rate": round(rate, 4), "low_reach_threshold": ctx.th.low_reach},
+                metrics={"activation_rate": rate, "activated": f"{k_act}/{n}", "low_reach_threshold": ctx.th.low_reach},
             )
         )
     else:
@@ -270,7 +302,7 @@ def _conditional(
                 rubric=False,
                 required=False,
                 reason="No sign that the gain bypasses the update path.",
-                metrics={"activation_rate": round(rate, 4), "low_reach_threshold": ctx.th.low_reach},
+                metrics={"activation_rate": rate, "activated": f"{k_act}/{n}", "low_reach_threshold": ctx.th.low_reach},
             )
         )
     return out

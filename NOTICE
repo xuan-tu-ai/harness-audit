@@ -9,7 +9,9 @@ The evaluation criteria implemented by harness-audit, and the short quotations
 of them in the source code, README and generated reports, are taken from:
 
   Wei, C., Guan, H., Zhu, M., Zhou, K., He, J., Zhou, X., Chen, H., Shen, Y.
-  "Self-Evolving Agent Harness", arXiv:2610.18813 (2026), and its companion
+  "Self-Evolving Agent Harness", arXiv:2610.18813 (2026); its companion
+  technical report "Harness Self-Evolution: Theory, Algorithms, Evaluation, Applications, and Impact",
+  https://openreview.net/pdf?id=m5jsFGXUM2 (§6, Eq. 11, Table 5); and the companion
   repository https://github.com/zgcagi/Harness-RSI
   (docs/evidence-criteria.md, data/claim-audit-rubric.md, README.md §3.2).
 

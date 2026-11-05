@@ -19,6 +19,8 @@ changed_artifacts:  # what differs between A and B
     hash_b: "sha256:..."
     signatures:     # optional: declared trace features that show the update was carried
       - {tool: Bash, pattern: "pytest"}
+    applies_to: [strings]   # optional: task ids or groups (globs) where the update is meant to apply,
+                            # declared before seeing outcomes; the denominator of the load/reach rates
 
 confounds: []       # other differences between arms (e.g. "max_turns 10 -> 20"); any entry -> Attribution PARTIAL
 
@@ -32,6 +34,10 @@ selection:
   report_uses: 1    # how many decisions the report split has informed (>1 = reused holdout)
   report_choice: fixed        # fixed | selected (round/config picked on the report split)
   n_compared: 1     # rows the reported configuration was chosen among
+
+oracle:             # how the scorer was kept out of the agent's reach
+  outside_workspace: true   # hidden tests and reference solutions are not in the agent's workspace
+  protected: ["(^|/)evaluator/", "test_hidden"]   # regexes; a traced tool call matching one touched the scorer
 
 thresholds:
   alpha: 0.05

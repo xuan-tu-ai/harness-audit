@@ -14,6 +14,7 @@ with the reasons and the numbers behind them.
 |---|---|
 | `docs/evidence-criteria.md` (Harness-RSI, 2026-10-17 snapshot) | The C / O / N definitions for each claim; unit of comparison = one primary comparison. |
 | `data/claim-audit-rubric.md` (Harness-RSI, incl. revisions of 2026-10-09, 2026-10-10, 2026-10-14) | Decision rules: Selection channels, Activation grades and existence rule, the three Attribution conditions and the "clearing the variation" standard, Improvement = task distance. |
+| Technical report *Harness Self-Evolution: Theory, Algorithms, Evaluation, Applications, and Impact* (openreview.net/pdf?id=m5jsFGXUM2), §6, read in session 2 | Where the four claims are actually defined (§6.1). Eq. 11: load, reach and carry rates over the runs where the update applies, carry conditioned on load (guidance) or reach (code), undefined rates reported as counts. Table 5: seven controls, including oracle integrity, which harness-audit lacked until session 2. The report recommends no task set; it names benchmarks only as examples (HarnessOpt-Bench, HarnessDev, GDPevo, EvoHarnessBench; SWE-bench Live and LiveBench for refresh). |
 | `README.md` §3.2 (Harness-RSI) | The admission gate `Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0`, its assumptions (independent exogenous tasks, losses in [0,1], fixed model and evaluator), and "repeated rollouts reduce execution noise but do not add independent tasks". |
 | `claude-agent-sdk` 0.2.178 source (`types.py`, `query.py`, `_internal/client.py`, `_internal/transport/subprocess_cli.py`) and docs `code.claude.com/docs/en/agent-sdk/{skills,hooks,cost-tracking}` | Adapter API: `query(prompt=, options=ClaudeAgentOptions(...))`; hooks `PreToolUse`/`PostToolUse` via `HookMatcher` (supported by `query()`, which always streams internally); skills are `<cwd>/.claude/skills/<name>/SKILL.md`, enabled with `skills=[...]`, discovered through `setting_sources`; `SystemMessage(subtype="init").data["skills"]` lists loaded skills; `ResultMessage.total_cost_usd` (client-side estimate), `.usage`, `.num_turns`, `.duration_ms`; per-query cap `max_budget_usd`. |
 | `claude-api` skill model table (cached 2026-10-06) | Haiku = `claude-haiku-5-5`, $0.10 / $0.50 per MTok input/output for prompts ≤100K tokens ($0.50 / $2.50 above). Sampling parameters are rejected on the current API version, so a "seed" is a replicate index, not a sampling seed. |
@@ -60,6 +61,7 @@ Selection reads the whole task registry.
 | Separate from **report choice** (round/config/hyperparameter picked on reporting partition) | `report_choice` | manifest `selection.report_choice ∈ {fixed, selected}` and `selection.n_compared` | `selected` → `fail` (N: "a headline configuration … picked on the reporting partition") |
 | Reused holdout | `reused_holdout` | manifest `selection.report_uses` (times the report split informed a decision) | `> 1` → `warn` ("reused holdout"; cf. Dwork et al. 2015 cited by the paper) |
 | Partition shown, not asserted | `partition_shown` | every scored record has a `split`, and the manifest task registry lists task → split | missing → `warn` (O: "split names asserted without the partition being shown") |
+| Oracle integrity (report Table 5): scorer outside what a candidate can edit or probe | `oracle_integrity` | `evaluator_hash_after` re-read after each run (the runner records it); manifest `oracle.outside_workspace` and `oracle.protected` regexes matched against traced tool-call summaries | scorer changed during a run → `fail`; a traced call touched a protected path, or scorer declared inside the workspace → `warn`; nothing declared or recorded → `note`. Not graded by the survey rubric. |
 | Admission gate on **fresh** tasks (paper §3.2) | `admission_gate` | per-task loss `ℓ = 1 − mean_seed(score)`; `Δ̂ = mean_task(ℓ_B − ℓ_A)`; `m` = number of **independent tasks** (seeds averaged first); `ε = sqrt(2·ln(K·T/δ)/m)`; gate passes iff `Δ̂ + ε < 0`. Computed on `admission` (or on `report` when no admission split, labelled as such) | gate not cleared → `warn`; `m = 0` → `skip`. Extra seeds never increase `m`. |
 
 ### Activation — "Identify whether the accepted update operated in the scored runs."
@@ -74,7 +76,8 @@ followed it").
 
 | Paper criterion | Check id | Implementation | Status rule |
 |---|---|---|---|
-| Availability is the weakest grade; load rates alone are `O` | `available` | rate of B report runs with `artifact_loaded` per changed artifact | reported; used by `reached_or_carried` |
+| Availability is the weakest grade; load rates alone are `O` | `available` | load rate of B report runs per changed artifact (Eq. 11 below) | reported; used by `reached_or_carried` |
+| Three rates (report Eq. 11) | metrics of `reached_or_carried` | `R(u)`: scored B runs where the artifact applies (`applies_to` globs on task id or group, declared before outcomes; default all). `load = |L|/|R|`, `reach = |B|/|R|`, `carry = |C|/|L|` for guidance (skill, prompt, file, config) or `|C|/|B|` for code and tools. A zero denominator gives `null` plus the counts, never 0 | reported |
 | **C** requires reached or carried evidence tied to the primary comparison; "one confirmed case can qualify; always record coverage" | `reached_or_carried` | per changed artifact: count of B report runs with reached / carried; coverage string `k/n scored runs` | ≥1 run reached/carried for any changed artifact → `pass`; only loaded → `warn` (O); traces present but artifact never loaded/reached → `fail` (N); no events at all → `skip` → UNKNOWN |
 | Evidence must come from the scored runs | `bound_to_primary` | only `report`-split B runs count; events from other splits are listed separately | reported |
 | Baseline contamination | `baseline_clean` | A runs that load an artifact with B's hash | any → `warn` |
@@ -248,6 +251,8 @@ imported lazily by the adapter.
 | `evaluator_changed` | B scored by a different evaluator | `same_evaluator` | Attribution FAIL |
 | `same_group_only` | gain only on the proposal group, zero on held-out groups | `heldout_gain` | Improvement PARTIAL |
 | `retention_regression` | B drops on retention tasks beyond the threshold | `retention` | Improvement FAIL |
+| `no_traces` | no traces collected | `reached_or_carried` | Activation UNKNOWN |
+| `oracle_touched` | some B runs read the hidden tests | `oracle_integrity` | Selection PARTIAL |
 
 Each defect scenario also asserts that the *other* claims keep their clean verdict, so a check that
 fires everywhere does not pass the suite.

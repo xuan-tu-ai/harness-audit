@@ -8,9 +8,10 @@ versions of an agent harness (A = before, B = after) and returns a verdict for e
 that a reported improvement rests on: **Selection, Activation, Attribution, Improvement**. Each verdict
 is `PASS`, `PARTIAL`, `FAIL` or `UNKNOWN`, with the reasons and the numbers behind them.
 
-The four claims and their evidence criteria come from *Self-Evolving Agent Harness*
-(Wei et al., 2026, [arXiv:2610.18813](https://arxiv.org/abs/2610.18813)) and its companion repository
-[zgcagi/Harness-RSI](https://github.com/zgcagi/Harness-RSI) (CC BY 4.0). harness-audit is an independent
+The four claims are defined in §6 of the technical report *Harness Self-Evolution: Theory, Algorithms, Evaluation, Applications, and Impact*
+(Wei et al., 2026, [OpenReview](https://openreview.net/pdf?id=m5jsFGXUM2)), the companion of the preprint *Self-Evolving Agent Harness*
+([arXiv:2610.18813](https://arxiv.org/abs/2610.18813)), which gives the admission gate (Eq. 8). The evidence
+rubric is from the repository [zgcagi/Harness-RSI](https://github.com/zgcagi/Harness-RSI) (CC BY 4.0). harness-audit is an independent
 implementation; see [Attribution](#attribution-and-citation).
 
 ![harness-audit HTML report: verdict cards for the four claims and effect estimates with intervals](docs/assets/report-synthetic.png)
@@ -62,8 +63,8 @@ about one comparison cannot borrow evidence from another model, benchmark or exp
 
 | Claim | Question | harness-audit checks |
 |---|---|---|
-| **Selection** | Was the reported number measured, or picked? | Report tasks are disjoint from the tasks that proposed the update and from the admission tasks (by id and content hash); the report split was not used to choose the round or configuration and was not reused; the paper's admission gate `Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0` on fresh tasks, with `m` counted in **tasks**, not seeds. |
-| **Activation** | Did the update operate in the scored runs? | Per changed artifact, the share of scored B runs where it was **available** (loaded), **reached** (its path executed) and **carried** (its effect reached later execution, e.g. a declared trace signature after the skill was invoked). Score difference when the update was activated versus not. |
+| **Selection** | Was the reported number measured, or picked? | Report tasks are disjoint from the tasks that proposed the update and from the admission tasks (by id and content hash); the report split was not used to choose the round or configuration and was not reused; the paper's admission gate `Δ̂ + sqrt(2·ln(K·T/δ)/m) < 0` on fresh tasks, with `m` counted in **tasks**, not seeds; **oracle integrity**: the scorer stayed out of the agent's reach (evaluator unchanged after each run, no traced tool call touching hidden tests). |
+| **Activation** | Did the update operate in the scored runs? | Per changed artifact, the report's three rates (Eq. 11) over the scored B runs where the update applies (`applies_to`, declared in advance): **load** and **reach** over those runs, **carry** over the runs that loaded it (guidance) or reached it (code). A rate with nothing to divide by is shown as undefined with its counts, never as 0. Score difference when the update was activated versus not. |
 | **Attribution** | Did the gain come from the update, not noise, compute or the evaluator? | Same evaluator and model; arms differ only in the declared artifacts; inference envelope (output tokens, turns, tool calls) within a ratio of A; paired bootstrap over tasks and a sign-flip permutation test; Δ compared with an A/A noise band. |
 | **Improvement** | How far does the gain reach? | Task distance between report tasks and update-forming tasks; gain on task groups that did not form the update; no regression on a retention split beyond your threshold. |
 
@@ -83,12 +84,13 @@ check fails, `PARTIAL` if any warns or a required check lacks data, `UNKNOWN` if
 evaluated, else `PASS`. Missing data never yields `PASS`: runs without traces make Activation `UNKNOWN`.
 
 Each claim also reports a **rubric grade** (`C/O/N/U`) computed from the published rubric's own
-conditions only. harness-audit is deliberately stricter in three places, and the report shows both:
+conditions only. harness-audit is deliberately stricter in four places, and the report shows both:
 
 - Improvement also requires a gain on held-out task groups and non-regression on retention (the rubric
   grades task distance only).
 - A changed evaluator or model is `FAIL` for Attribution (the rubric grades it partial).
-- The admission gate is reported under Selection; the rubric does not grade it.
+- The admission gate and oracle integrity (a control from the report's Table 5) are reported under
+  Selection; the rubric does not grade them.
 
 The full mapping from each paper criterion to its check, with the exact status rules, is in
 [PLAN.md](PLAN.md#2-mapping-from-paper-criteria-to-checks).
@@ -108,6 +110,7 @@ check fires, that the other checks stay quiet, and that a clean experiment passe
 | `same_group_only` | gain only on the group that formed the update | `heldout_gain` | Improvement PARTIAL |
 | `retention_regression` | B regresses on earlier tasks | `retention` | Improvement FAIL |
 | `no_traces` | no traces collected | `reached_or_carried` | Activation UNKNOWN |
+| `oracle_touched` | some B runs read the hidden tests | `oracle_integrity` | Selection PARTIAL |
 
 ## Audit your own runs (any framework)
 
@@ -127,7 +130,9 @@ imported. One line per run:
 `task_id`, `split` (`proposal | admission | report | retention`), `arm` (`A`, `B`, optional `A2` for an
 independent A/A replicate), `harness_hash`, `model`, `score` in [0, 1], `evaluator_hash`. Everything else
 is optional and only lowers what can be concluded when absent. `events: null` means "not traced";
-`events: []` means "traced, nothing happened".
+`events: []` means "traced, nothing happened". Optional `evaluator_hash_after` is the evaluator hash re-read
+after the agent ran; if it differs from `evaluator_hash`, the run changed its own scorer and
+`oracle_integrity` fails.
 
 `harness-audit init my-experiment/` writes a commented `manifest.yaml` (changed artifacts and their trace
 signatures, the task registry that shows the partition, `K`, `T`, `δ`, how the update was admitted, how
@@ -207,9 +212,16 @@ harness.
 
 ## Known limitations
 
-- **Activation for interpreted guidance** (system prompts, instructions) is only as good as the trace
-  signatures you declare. Adherence can also appear in A, so the report shows the signature's rate in A
-  next to its rate in B.
+- **Carried for interpreted guidance** (skills, system prompts) is approximated by the trace signatures you
+  declare. The report defines it as adherence: the trajectory scored against a rubric drawn from the skill
+  text. A signature is a weaker proxy. Adherence can also appear in A, so the report shows the signature's
+  rate in A next to its rate in B.
+- **Oracle integrity is detected, not enforced.** The runner keeps hidden tests out of the workspace and
+  re-hashes the evaluator after every run, but an agent with Bash can still reach host paths. Reads are
+  caught only if a traced tool call names a protected path. Run untrusted agents in a container.
+- **Not yet recorded** (report Table 5): model version and decoding parameters, retries and verifier
+  calls inside the loop, and search cost (the compute spent finding the update) separately from the scored
+  runs.
 - **Small task sets have little power.** The admission gate needs more than `2·ln(K·T/δ)` tasks even for a
   perfect gain (6 tasks at `K = T = 1`, `δ = 0.05`), and an exact sign-flip test needs at least 6 tasks to reach p < 0.05. The report says when a check
   could not have passed at the given size.
@@ -222,7 +234,9 @@ harness.
 - **Selection inputs that cannot be read from the data** (how the update was admitted, how often the
   report split was used, whether the configuration was chosen on it) come from the manifest and are only as
   accurate as what you declare.
-- Retention is checked for the B-vs-A pair at this point in time, not across later updates.
+- Retention is checked for the B-vs-A pair at this point in time, not across later updates. The report's
+  longitudinal controls (task-order permutations, a frozen reference kept alongside the loop, re-measuring a
+  credited gain several rounds later) are out of scope.
 - The rubric's `C/O` boundary is a judgement; harness-audit fixes one reading of it in code. Thresholds are
   configurable in the manifest.
 
@@ -253,6 +267,16 @@ definitions and verdict mapping are its own and are not endorsed by the original
   archivePrefix = {arXiv},
   primaryClass  = {cs.AI},
   url           = {https://arxiv.org/pdf/2610.18813}
+}
+
+@misc{wei2026harnessselfevolution,
+  title  = {{Harness Self-Evolution: Theory, Algorithms, Evaluation, Applications, and Impact}},
+  author = {Wei, Chuyang and Guan, Haoxiang and Zhu, Minghang and
+            Zhou, Kexin and He, Jiyan and Zhou, Xiren and
+            Chen, Huanhuan and Shen, Yifei},
+  year   = {2026},
+  note   = {Companion technical report to arXiv:2610.18813},
+  url    = {https://openreview.net/pdf?id=m5jsFGXUM2}
 }
 ```
 
