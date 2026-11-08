@@ -30,6 +30,17 @@ PRICES: dict[str, Price] = {
 }
 
 
+def register_prices(table: dict[str, dict[str, float]]) -> None:
+    """Add prices (USD per million tokens) for models without a built-in price; cache prices default to input."""
+    for model, p in table.items():
+        PRICES[model] = Price(
+            input=p["input"],
+            output=p["output"],
+            cache_read=p.get("cache_read", p["input"]),
+            cache_write=p.get("cache_write", p["input"]),
+        )
+
+
 def price_for(model: str) -> Price:
     if model in PRICES:
         return PRICES[model]

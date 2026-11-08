@@ -43,6 +43,20 @@ Point an experiment at your adapter with a `module:Class` path:
 adapter: my_package.my_adapter:MyAdapter
 ```
 
+## Built-in adapters
+
+| Name | Agent | Credentials |
+|---|---|---|
+| `claude_agent_sdk` | Claude Code through the Claude Agent SDK | `ANTHROPIC_API_KEY`; refuses any other credential source |
+| `openai_compat` | harness-audit's own minimal tool loop over an OpenAI-compatible `/chat/completions` endpoint (Read, Edit, Write, Bash, Glob, Grep, and `Skill` when the harness has skills) | the variable named by `adapter_options.api_key_env` (default `TOKENHARBOR_API_KEY`) |
+
+`openai_compat` takes `adapter_options` in the experiment file: `base_url` (default
+`https://tokenharbor.ai/v1`, or `$TOKENHARBOR_BASE_URL`), `api_key_env`, `request_timeout_s`,
+`max_output_tokens`, `temperature`. Keys are refused in `adapter_options`. File tools are confined to the
+run directory; Bash runs there with a minimal environment that holds no credentials, but it is not
+sandboxed. Cost comes from the gateway's `usage.cost` when reported, else from `pricing` in the experiment
+file. It is a different harness from Claude Code, so its results say nothing about Claude Code.
+
 ## Events
 
 Activation is judged from events, so they decide what harness-audit can conclude:

@@ -234,6 +234,13 @@ Expected from the design (not a result): with 5 admission tasks the admission ga
 report states both limits next to the numbers. A larger task set is needed for those two checks to be able
 to pass.
 
+### Through an OpenAI-compatible gateway
+
+`adapter: openai_compat` runs a minimal tool-using agent loop against any `/chat/completions` endpoint, for
+example Token Harbor; see `examples/experiment.tokenharbor.yaml`. The key is read from the variable named
+in `adapter_options.api_key_env`. Models without a built-in price need `pricing` in the experiment file
+before `--dry-run` can estimate.
+
 ## Write an adapter
 
 An adapter runs one task under one harness and returns events and usage; the runner does the rest. See

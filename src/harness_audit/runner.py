@@ -17,12 +17,13 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .adapters import Adapter, AdapterResult, FatalAdapterError, RunRequest, load_adapter
-from .cost import estimate_run_usd
+from .cost import estimate_run_usd, register_prices
 from .evaluator import evaluator_hash, score_workspace
 from .harness import Harness, diff_harnesses, load_harness
 from .hashing import sha256_bytes
@@ -55,6 +56,23 @@ class ExperimentConfig(BaseModel):
     proposal_groups: list[str] | None = None
     selection: SelectionConfig = Field(default_factory=SelectionConfig)
     search_cost: SearchCost | None = None
+    adapter_options: dict[str, Any] = Field(
+        default_factory=dict, description="keyword arguments for the adapter (e.g. base_url, api_key_env); never a key"
+    )
+
+    @field_validator("adapter_options")
+    @classmethod
+    def _no_secrets(cls, v: dict[str, Any]) -> dict[str, Any]:
+        bad = [k for k in v if re.search(r"(?i)(^|_)(key|token|secret|password)$", k)]
+        if bad:
+            raise ValueError(f"adapter_options must not hold credentials ({bad}); name an environment variable instead")
+        return v
+
+    pricing: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description="USD per million tokens by model id: {input, output[, cache_read, cache_write]}, for models "
+        "harness-audit has no price for",
+    )
     thresholds: Thresholds = Field(default_factory=Thresholds)
 
 
@@ -77,6 +95,7 @@ def load_experiment(path: str | Path, seeds: int | None = None, aa: bool | None 
         raise InputError(f"{p}: file not found") from e
     except (yaml.YAMLError, ValidationError) as e:
         raise InputError(f"{p}: {e}") from e
+    register_prices(cfg.pricing)
     if seeds is not None:
         cfg.seeds = seeds
     if aa is not None:
@@ -141,7 +160,7 @@ class Runner:
     @property
     def adapter(self) -> Adapter:
         if self._adapter is None:
-            self._adapter = load_adapter(self.exp.config.adapter)
+            self._adapter = load_adapter(self.exp.config.adapter, self.exp.config.adapter_options)
         return self._adapter
 
     @property
@@ -189,8 +208,14 @@ class Runner:
         per_t: dict[str, float] = {}
         per_w: dict[str, float] = {}
         for arm, h in (("A", self.exp.harness_a), ("B", self.exp.harness_b)):
-            t, w = estimate_run_usd(c.model, h.config.max_turns, self._extra_context(h))
-            per_t[arm], per_w[arm] = t, min(w, c.per_run_max_usd)
+            try:
+                t, w = estimate_run_usd(c.model, h.config.max_turns, self._extra_context(h))
+            except KeyError:
+                raise InputError(
+                    f"no price for model {c.model!r}: add `pricing: {{{c.model}: {{input: <USD/MTok>, output: <USD/MTok>}}}}` "
+                    "to the experiment file, using the provider's published prices"
+                ) from None
+            per_t[arm], per_w[arm] = min(t, c.per_run_max_usd), min(w, c.per_run_max_usd)
         per_t["A2"], per_w["A2"] = per_t["A"], per_w["A"]
         calibrated = len(observed) >= 5
         if calibrated:

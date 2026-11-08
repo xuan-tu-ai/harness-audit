@@ -160,7 +160,11 @@ def run(
         raise typer.Exit(EXIT_INPUT) from e
     runner = Runner(exp, cache_dir=cache_dir, concurrency=concurrency)
     plan = runner.plan()
-    typer.echo(runner.describe(plan))
+    try:
+        typer.echo(runner.describe(plan))
+    except InputError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(EXIT_INPUT) from e
     if dry_run:
         raise typer.Exit(EXIT_OK)
     if max_cost is None:
