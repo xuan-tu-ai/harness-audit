@@ -299,3 +299,12 @@ def test_gateway_options_route_every_model_call_and_reprice(tmp_path: Path, monk
         assert missing == [] and cost == pytest.approx((1000 * 0.3 + 100 * 1.2 + 10000 * 0.0015) / 1e6)
     finally:
         PRICES.pop("gw-model")
+
+
+def test_polyglot_experiments_load() -> None:
+    from harness_audit.runner import load_experiment
+
+    for m in ("deepseek", "haiku"):
+        exp = load_experiment(EXAMPLES / "polyglot" / f"experiment.{m}.yaml")
+        assert exp.config.adapter == "claude_agent_sdk" and exp.config.adapter_options["api_key_env"] == "TOKENHARBOR_API_KEY"
+        assert exp.harness_b.skills == ["spec-to-tests"] and exp.harness_a.config.use_claude_code_preset
