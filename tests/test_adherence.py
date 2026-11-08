@@ -183,3 +183,12 @@ def test_markdown_escapes_pipes_in_rubric_text() -> None:
     m.changed_artifacts[0].rubric = [RubricItem(id="tests", text="run a | b", tool="Bash", pattern="test")]
     md = to_markdown(run_audit(records, m))
     assert "run a \\| b" in md
+
+
+def test_chained_command_satisfies_ordered_steps_in_order_only() -> None:
+    """Seen in a real Haiku run: both checks in one command, in the order the skill asks for."""
+    art = example_skill()
+    chained = [call(1, "Edit", "f.py"), call(2, "Bash", "python test_public.py && python -c 'assert f(1) == 1'")]
+    assert evaluate(chained, art).carried is True
+    reversed_ = [call(1, "Edit", "f.py"), call(2, "Bash", "python -c 'assert f(1) == 1' && python test_public.py")]
+    assert evaluate(reversed_, art).items["edge_case_asserts"] == "unmet"

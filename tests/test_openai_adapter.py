@@ -160,12 +160,12 @@ def test_experiment_rejects_keys_in_adapter_options(tmp_path: Path) -> None:
         load_experiment(p)
 
 
-def test_tokenharbor_example_loads_and_asks_for_prices() -> None:
-    from harness_audit.io import InputError
+def test_tokenharbor_examples_load_with_published_prices(tmp_path: Path) -> None:
     from harness_audit.runner import Runner, load_experiment
 
-    exp = load_experiment(EXAMPLES / "experiment.tokenharbor.yaml")
-    assert exp.config.adapter == "openai_compat" and exp.config.adapter_options["api_key_env"] == "TOKENHARBOR_API_KEY"
-    r = Runner(exp)
-    with pytest.raises(InputError, match="pricing"):
-        r.describe(r.plan())
+    for name in ("experiment.tokenharbor.yaml", "experiment.tokenharbor-haiku.yaml"):
+        exp = load_experiment(EXAMPLES / name)
+        assert exp.config.adapter == "openai_compat" and exp.config.adapter_options["api_key_env"] == "TOKENHARBOR_API_KEY"
+        r = Runner(exp, cache_dir=tmp_path / name)
+        est = r.estimate(r.plan())
+        assert est.to_run + est.cached == 16 and 0 < est.typical_usd <= est.worst_usd <= 16 * 0.03 + 1e-9

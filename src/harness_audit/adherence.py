@@ -47,22 +47,26 @@ class RubricResult:
         return [i for i, o in self.items.items() if self.required[i] and o == "unjudged"]
 
 
-def _matches(e: Event, item: RubricItem, *, use_ok: bool = True) -> bool:
+def _span(e: Event, item: RubricItem, start: int = 0, *, use_ok: bool = True) -> int | None:
+    """End position of the item's match in the call's summary, searching from ``start``; None if no match."""
     if e.type != "tool_call":
-        return False
+        return None
     if use_ok and item.ok is not None and e.ok is not item.ok:
-        return False
+        return None
     summary = e.summary or ""
-    if item.any_of:
-        for s in item.any_of:
-            if s.tool is not None and not re.fullmatch(s.tool, e.name or ""):
-                continue
-            if re.search(s.pattern, summary):
-                return True
-        return False
-    if item.tool is not None and not re.fullmatch(item.tool, e.name or ""):
-        return False
-    return bool(re.search(item.pattern, summary))
+    pairs = [(s.tool, s.pattern) for s in item.any_of] if item.any_of else [(item.tool, item.pattern)]
+    ends = []
+    for tool, pattern in pairs:
+        if tool is not None and not re.fullmatch(tool, e.name or ""):
+            continue
+        m = re.compile(pattern).search(summary, start)
+        if m:
+            ends.append(m.end())
+    return min(ends) if ends else None
+
+
+def _matches(e: Event, item: RubricItem, *, use_ok: bool = True) -> bool:
+    return _span(e, item, use_ok=use_ok) is not None
 
 
 def evaluate(events: Iterable[Event], art: ChangedArtifact, start: float | None = 0.0) -> RubricResult:
@@ -81,7 +85,7 @@ def evaluate(events: Iterable[Event], art: ChangedArtifact, start: float | None 
         if e.type == JUDGMENT and e.ok is not None and e.name and (e.artifact is None or _same(e.artifact, art.path))
     }
     by_id = {i.id: i for i in rubric}
-    first: dict[str, int | None] = {}  # index in `calls` of the first call that met the item
+    first: dict[str, tuple[int, int] | None] = {}  # (call index, end of match in its summary) of the first hit
 
     def trigger(item: RubricItem) -> int | None:
         """Index of the first failed call matching any item listed in ``on_failure_of``."""
@@ -101,21 +105,31 @@ def evaluate(events: Iterable[Event], art: ChangedArtifact, start: float | None 
             v = judged.get(iid)
             out.items[iid] = "unjudged" if v is None else ("met" if v else "unmet")
             return out.items[iid]
-        lo = -1
+        # Earliest admissible position: a later call, or later text in the same call (one shell
+        # command often chains several steps, e.g. `python test_public.py && python -c ...`).
+        lo: tuple[int, int] = (-1, 0)
         if item.on_failure_of:
             t = trigger(item)
             if t is None:
                 out.items[iid] = "n/a"
                 return "n/a"
-            lo = t
+            lo = (t + 1, 0)  # strictly after the failed call
         for dep in item.after:
             o = solve(dep)
             if o == "unmet":
                 out.items[iid] = "unmet"
                 return "unmet"
-            if o == "met" and first[dep] is not None:
-                lo = max(lo, first[dep])  # type: ignore[arg-type]
-        hit = next((k for k, e in enumerate(calls) if k > lo and _matches(e, item)), None)
+            d = first.get(dep)
+            if o == "met" and d is not None:
+                lo = max(lo, d)
+        hit: tuple[int, int] | None = None
+        for k, e in enumerate(calls):
+            if k < lo[0]:
+                continue
+            end = _span(e, item, lo[1] if k == lo[0] else 0)
+            if end is not None:
+                hit = (k, end)
+                break
         first[iid] = hit
         out.items[iid] = "met" if hit is not None else "unmet"
         return out.items[iid]
