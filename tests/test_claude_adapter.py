@@ -258,3 +258,45 @@ def test_served_models_fall_back_to_model_usage() -> None:
     msg = type("R", (), {"model_usage": {"claude-haiku-5-5-20261001": {}}})()
     assert mod.served_models(rec, msg) == ["claude-haiku-5-5-20261001"]
     assert mod.served_models(rec, None) is None
+
+
+def test_gateway_options_route_every_model_call_and_reprice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from harness_audit.adapters import FatalAdapterError, load_adapter
+    from harness_audit.cost import PRICES, register_prices
+
+    a = load_adapter(
+        "claude_agent_sdk",
+        {"base_url": "https://gw.example/", "api_key_env": "GW_KEY", "sdk_max_budget_usd": 3.0},
+    )
+    monkeypatch.delenv("GW_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "host-key")
+    with pytest.raises(FatalAdapterError, match="GW_KEY"):
+        a.preflight()
+    monkeypatch.setenv("GW_KEY", "gw-test-key")
+    a.preflight()
+    req = _req(tmp_path)
+    env = a.env_for(req, tmp_path / "cfg")
+    assert env["ANTHROPIC_BASE_URL"] == "https://gw.example" and env["ANTHROPIC_API_KEY"] == "gw-test-key"
+    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == req.model
+    assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert a.options(req, mod.TraceRecorder(req.harness, req.workdir), tmp_path / "cfg").max_budget_usd == 3.0
+
+    msg = sdk.ResultMessage(
+        subtype="success",
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=False,
+        num_turns=1,
+        session_id="s",
+        total_cost_usd=0.2,  # the SDK's guess for an unknown model
+        usage={"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 10000},
+        model_usage={"gw-model": {"inputTokens": 1000, "outputTokens": 100, "cacheReadInputTokens": 10000}},
+    )
+    assert mod.gateway_cost(msg, "gw-model") == (None, ["gw-model"])
+    register_prices({"gw-model": {"input": 0.3, "output": 1.2, "cache_read": 0.0015}})
+    try:
+        cost, missing = mod.gateway_cost(msg, "gw-model")
+        assert missing == [] and cost == pytest.approx((1000 * 0.3 + 100 * 1.2 + 10000 * 0.0015) / 1e6)
+    finally:
+        PRICES.pop("gw-model")
+

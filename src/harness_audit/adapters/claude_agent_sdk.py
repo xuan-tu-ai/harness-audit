@@ -23,6 +23,15 @@ inherited ``CLAUDE_*`` / ``ANTHROPIC_*`` variable is blanked for the subprocess 
 aborted before any model call if the CLI's ``init`` message reports an ``apiKeySource`` other than
 ``ANTHROPIC_API_KEY`` (so a host login or gateway is never billed by accident). Variables listed in
 ``HARNESS_AUDIT_PASS_ENV`` (comma-separated) are passed through unchanged.
+
+Gateways: with ``adapter_options.base_url`` (an Anthropic-compatible endpoint such as Token Harbor's
+``https://tokenharbor.ai``), the CLI is pointed there with ``ANTHROPIC_BASE_URL``, the key is read
+from ``api_key_env`` and handed to the CLI as ``ANTHROPIC_API_KEY``, the CLI's background model is
+set to the run's model (``small_model`` overrides it) so no other model is called, and
+non-essential traffic is turned off. The SDK prices unknown models with a guessed rate, so on a
+gateway the run's cost is recomputed per model from the experiment's ``pricing`` table and the SDK's
+figure is kept as ``sdk_cost_estimate_usd``. ``sdk_max_budget_usd`` sets the SDK's own per-query cap
+(in its estimated dollars), apart from the runner's reservation.
 """
 
 from __future__ import annotations
@@ -47,6 +56,47 @@ SUMMARY_MAX = 160
 SKILLS_DIR = Path(".claude") / "skills"
 API_KEY_VAR = "ANTHROPIC_API_KEY"
 SCRUB_PREFIXES = ("CLAUDE_", "ANTHROPIC_")
+
+
+def gateway_env(base_url: str, key: str, model: str, small_model: str | None = None) -> dict[str, str]:
+    """Overrides that send every CLI model call to an Anthropic-compatible gateway."""
+    small = small_model or model
+    return {
+        "ANTHROPIC_BASE_URL": base_url.rstrip("/"),
+        API_KEY_VAR: key,
+        "ANTHROPIC_SMALL_FAST_MODEL": small,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": small,
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+
+
+def gateway_cost(result: Any, fallback_model: str) -> tuple[float | None, list[str]]:
+    """Cost from token counts and the registered prices, per model in ``model_usage``; and unpriced models."""
+    mu = getattr(result, "model_usage", None) or {}
+    total, missing = 0.0, []
+    if not mu:
+        u = dict(getattr(result, "usage", None) or {})
+        mu = {
+            fallback_model: {
+                "inputTokens": u.get("input_tokens"),
+                "outputTokens": u.get("output_tokens"),
+                "cacheReadInputTokens": u.get("cache_read_input_tokens"),
+                "cacheCreationInputTokens": u.get("cache_creation_input_tokens"),
+            }
+        }
+    for model, m in mu.items():
+        name = (m or {}).get("canonicalModel") or model
+        usage = Usage(
+            input_tokens=m.get("inputTokens"),
+            output_tokens=m.get("outputTokens"),
+            cache_read_input_tokens=m.get("cacheReadInputTokens"),
+            cache_creation_input_tokens=m.get("cacheCreationInputTokens"),
+        )
+        try:
+            total += cost_from_usage(name, usage)
+        except KeyError:
+            missing.append(name)
+    return (None if missing else round(total, 6)), missing
 
 
 def child_env(config_dir: Path, environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -302,6 +352,18 @@ class ClaudeAgentSDKAdapter:
 
     id = "claude_agent_sdk/1"
 
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key_env: str = API_KEY_VAR,
+        small_model: str | None = None,
+        sdk_max_budget_usd: float | None = None,
+    ) -> None:
+        self.base_url = base_url
+        self.api_key_env = api_key_env
+        self.small_model = small_model
+        self.sdk_max_budget_usd = sdk_max_budget_usd
+
     def installed_paths(self) -> list[str]:
         return [".claude"]
 
@@ -311,8 +373,8 @@ class ClaudeAgentSDKAdapter:
             import claude_agent_sdk  # noqa: F401
         except ImportError as e:
             raise FatalAdapterError("claude-agent-sdk is not installed: pip install 'harness-audit[claude]'") from e
-        if not os.environ.get(API_KEY_VAR):
-            raise FatalAdapterError(f"{API_KEY_VAR} is not set; harness-audit only runs the Claude API with an API key")
+        if not os.environ.get(self.api_key_env):
+            raise FatalAdapterError(f"{self.api_key_env} is not set; harness-audit only runs the Claude API with an API key")
 
     def install(self, harness: Harness, workdir: Path) -> None:
         """Copy the harness's skills into the workdir where the CLI discovers project skills."""
@@ -345,19 +407,27 @@ class ClaudeAgentSDKAdapter:
             cwd=str(req.workdir),
             model=req.model,
             max_turns=cfg.max_turns,
-            max_budget_usd=req.max_budget_usd,
+            max_budget_usd=self.sdk_max_budget_usd if self.sdk_max_budget_usd is not None else req.max_budget_usd,
             hooks={
                 "PreToolUse": [HookMatcher(matcher=None, hooks=[recorder.pre_tool_use])],
                 "PostToolUse": [HookMatcher(matcher=None, hooks=[recorder.post_tool_use])],
                 "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[recorder.post_tool_use_failure])],
             },
-            env=child_env(config_dir or req.workdir.parent / "claude-config"),
+            env=self.env_for(req, config_dir or req.workdir.parent / "claude-config"),
         )
         if cfg.effort:
             kwargs["effort"] = cfg.effort
         if cfg.thinking:
             kwargs["thinking"] = {"type": cfg.thinking}
         return ClaudeAgentOptions(**kwargs)
+
+    def env_for(self, req: RunRequest, config_dir: Path) -> dict[str, str]:
+        env = child_env(config_dir)
+        if self.base_url:
+            env.update(gateway_env(self.base_url, os.environ.get(self.api_key_env, ""), req.model, self.small_model))
+        elif self.api_key_env != API_KEY_VAR:
+            env[API_KEY_VAR] = os.environ.get(self.api_key_env, "")
+        return env
 
     async def run(self, req: RunRequest) -> AdapterResult:
         try:
@@ -409,6 +479,12 @@ class ClaudeAgentSDKAdapter:
         wall = time.monotonic() - t0
         if result is not None:
             usage = result_usage(result, req.model, rec.tool_calls, wall, rec.model_calls)
+            if self.base_url:
+                sdk_estimate = usage.cost_usd
+                usage.cost_usd, missing = gateway_cost(result, req.model)
+                usage.sdk_cost_estimate_usd = sdk_estimate  # type: ignore[attr-defined]
+                if missing:
+                    usage.unpriced_models = missing  # type: ignore[attr-defined]
             if status == "ok":
                 status = status_of(result)
                 if status == "error":

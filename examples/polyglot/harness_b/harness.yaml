@@ -1,0 +1,52 @@
+# Candidate: the baseline plus one skill. Everything else is identical.
+name: claude-code+spec-to-tests
+system_prompt_file: null
+use_claude_code_preset: true
+allowed_tools: [Read, Edit, Write, MultiEdit, Bash, Glob, Grep, TodoWrite]
+max_turns: 40
+applies_to:
+  skills/spec-to-tests/SKILL.md: [exercism]
+rubrics:
+  # Adherence rubric drawn from the skill's steps, read from the trace from the moment the skill was
+  # invoked. Written with the skill, before any run of these tasks.
+  skills/spec-to-tests/SKILL.md:
+    - id: read_spec
+      text: "1. Read the whole specification and the stub file."
+      any_of:
+        - {tool: Read, pattern: 'INSTRUCTIONS\.md$'}
+        - {tool: Bash, pattern: 'INSTRUCTIONS\.md'}
+      required: false   # agents often read the spec before invoking the skill
+    - id: checklist
+      text: "2. Before writing code, list every requirement as a short line."
+      check: judge
+      required: false
+    - id: write_tests
+      text: "3. Create test_spec.py (own tests, one assert per checklist line)."
+      any_of:
+        - {tool: "Write|Edit|MultiEdit", pattern: 'test\w*\.py$'}
+        - {tool: Bash, pattern: '>\s*\S*test\w*\.py'}
+    - id: implement
+      text: "4. Implement the code in the stub file."
+      tool: "Write|Edit|MultiEdit"
+      pattern: '^(?!.*test)[^/]*\.py$'
+    - id: run_tests
+      text: "5. Run your tests with python test_spec.py."
+      tool: Bash
+      pattern: 'test\w*\.py|pytest|unittest'
+      after: [write_tests, implement]
+    - id: fix_after_failure
+      text: "6. If a test fails, fix the code, or the test if it misread the spec ..."
+      tool: "Write|Edit|MultiEdit"
+      pattern: '\.py$'
+      on_failure_of: [run_tests]
+    - id: rerun_until_pass
+      text: "6. ... and run the tests again until they all pass."
+      tool: Bash
+      pattern: 'test\w*\.py|pytest|unittest'
+      ok: true
+      after: [fix_after_failure]
+      on_failure_of: [run_tests]
+    - id: final_review
+      text: "7. Re-read the specification against the checklist."
+      check: judge
+      required: false

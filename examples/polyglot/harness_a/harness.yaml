@@ -1,0 +1,6 @@
+# Baseline: Claude Code itself (its own system prompt and tool loop), nothing added.
+name: claude-code
+system_prompt_file: null
+use_claude_code_preset: true
+allowed_tools: [Read, Edit, Write, MultiEdit, Bash, Glob, Grep, TodoWrite]
+max_turns: 40

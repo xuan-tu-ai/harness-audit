@@ -1,0 +1,4 @@
+id: exercism/book-store
+group: exercism
+split: admission
+prompt: 'INSTRUCTIONS.md in the current directory describes a programming exercise. Use those instructions to modify the supplied file: `book_store.py`. Don''t change the names of existing functions or classes, as they may be referenced from other code like unit tests, etc. Only use standard libraries, don''t suggest installing any packages. Hidden unit tests will check your solution.'

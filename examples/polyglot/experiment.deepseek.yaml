@@ -1,0 +1,25 @@
+# Does the spec-to-tests skill help Claude Code on hard exercises? Model: deepseek-v4.1-flash through Token Harbor.
+# Tasks: Python exercises of the Aider polyglot benchmark (Exercism, MIT); see tasks/README.md for how
+# the report split was chosen. The agent is Claude Code (claude_agent_sdk adapter) pointed at Token
+# Harbor's Anthropic-compatible endpoint; the key is read from TOKENHARBOR_API_KEY, never this file.
+experiment: polyglot-spec-to-tests-deepseek
+baseline: harness_a (Claude Code, no skill)
+round: 1
+model: deepseek-v4.1-flash
+adapter: claude_agent_sdk
+adapter_options:
+  base_url: https://tokenharbor.ai
+  api_key_env: TOKENHARBOR_API_KEY   # the name of the variable, never the key
+  sdk_max_budget_usd: 5.0            # the SDK's own cap, in its estimated dollars (it guesses prices for these models)
+tasks_dir: tasks
+harness_a: harness_a
+harness_b: harness_b
+seeds: 2
+aa: false
+splits: [report]
+per_run_max_usd: 0.50   # reservation per run for the --max-cost guard, at the prices below
+timeout_s: 900
+eval_timeout_s: 120
+pricing:   # published by GET https://tokenharbor.ai/v1/models on 2026-11-08 (USD per million tokens)
+  deepseek-v4.1-flash: {input: 0.30, output: 1.20, cache_read: 0.0015}
+  claude-haiku-5.5: {input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125}
