@@ -32,6 +32,15 @@ non-essential traffic is turned off. The SDK prices unknown models with a guesse
 gateway the run's cost is recomputed per model from the experiment's ``pricing`` table and the SDK's
 figure is kept as ``sdk_cost_estimate_usd``. ``sdk_max_budget_usd`` sets the SDK's own per-query cap
 (in its estimated dollars), apart from the runner's reservation.
+
+Isolation: with ``isolate: true`` the CLI is started through ``isolate.sh`` in new mount and PID
+namespaces where /home, /root, /tmp and /var/tmp are empty except for the run's working directory and
+config directory. Claude Code's Bash can otherwise read any file on the machine, including the hidden
+tests (seen in a real run: ``grep -r`` over ``/`` found them). ``claude_bin`` names the CLI to run
+inside (default: ``claude`` on PATH; it must live outside the hidden directories). The namespace has
+no network except a gate (``netfilter.py``) to ``allow_hosts`` (default: the ``base_url`` host, or
+``api.anthropic.com``): seen in a real run, an agent downloaded the benchmark's upstream tests with
+``curl``.
 """
 
 from __future__ import annotations
@@ -42,10 +51,12 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..cost import cost_from_usage
 from ..harness import Harness
@@ -56,6 +67,24 @@ SUMMARY_MAX = 160
 SKILLS_DIR = Path(".claude") / "skills"
 API_KEY_VAR = "ANTHROPIC_API_KEY"
 SCRUB_PREFIXES = ("CLAUDE_", "ANTHROPIC_")
+ISOLATE_SCRIPT = Path(__file__).with_name("isolate.sh")
+HIDDEN_DIRS = ("/home", "/root", "/tmp", "/var/tmp")
+CA_VARS = ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
+
+
+def _hidden(path: str) -> bool:
+    return any(path == d or path.startswith(d + "/") for d in HIDDEN_DIRS)
+
+
+def isolation_env(claude_bin: str, allow_hosts: list[str], environ: dict[str, str] | None = None) -> dict[str, str]:
+    """Variables for isolate.sh: the CLI, the hosts the run may reach, and CA bundles to copy back in."""
+    environ = dict(os.environ) if environ is None else environ
+    keep = sorted({environ[v] for v in CA_VARS if environ.get(v) and _hidden(environ[v])})
+    return {
+        "HARNESS_AUDIT_CLAUDE_BIN": claude_bin,
+        "HARNESS_AUDIT_ALLOW_HOSTS": ",".join(allow_hosts),
+        "HARNESS_AUDIT_KEEP_FILES": ":".join(keep),
+    }
 
 
 def gateway_env(base_url: str, key: str, model: str, small_model: str | None = None) -> dict[str, str]:
@@ -358,7 +387,15 @@ class ClaudeAgentSDKAdapter:
         api_key_env: str = API_KEY_VAR,
         small_model: str | None = None,
         sdk_max_budget_usd: float | None = None,
+        isolate: bool = False,
+        claude_bin: str | None = None,
+        allow_hosts: list[str] | None = None,
     ) -> None:
+        self.isolate = isolate
+        if allow_hosts is None:
+            allow_hosts = [urlsplit(base_url).hostname or ""] if base_url else ["api.anthropic.com"]
+        self.allow_hosts = [h for h in allow_hosts if h]
+        self.claude_bin = claude_bin
         self.base_url = base_url
         self.api_key_env = api_key_env
         self.small_model = small_model
@@ -375,6 +412,22 @@ class ClaudeAgentSDKAdapter:
             raise FatalAdapterError("claude-agent-sdk is not installed: pip install 'harness-audit[claude]'") from e
         if not os.environ.get(self.api_key_env):
             raise FatalAdapterError(f"{self.api_key_env} is not set; harness-audit only runs the Claude API with an API key")
+        if self.isolate:
+            self._isolation_bin()
+            probe = subprocess.run(
+                ["unshare", "--mount", "--pid", "--net", "--fork", "true"], capture_output=True, text=True, check=False
+            )
+            if probe.returncode != 0:
+                raise FatalAdapterError(f"isolate: cannot create mount/PID namespaces: {probe.stderr.strip()[:200]}")
+
+    def _isolation_bin(self) -> str:
+        found = self.claude_bin or shutil.which("claude")
+        if not found:
+            raise FatalAdapterError("isolate: no `claude` CLI on PATH; set adapter_options.claude_bin")
+        real = os.path.realpath(found)
+        if _hidden(real):
+            raise FatalAdapterError(f"isolate: the CLI at {real} is under a directory hidden from the agent")
+        return found
 
     def install(self, harness: Harness, workdir: Path) -> None:
         """Copy the harness's skills into the workdir where the CLI discovers project skills."""
@@ -415,6 +468,8 @@ class ClaudeAgentSDKAdapter:
             },
             env=self.env_for(req, config_dir or req.workdir.parent / "claude-config"),
         )
+        if self.isolate:
+            kwargs["cli_path"] = str(ISOLATE_SCRIPT)
         if cfg.effort:
             kwargs["effort"] = cfg.effort
         if cfg.thinking:
@@ -427,6 +482,8 @@ class ClaudeAgentSDKAdapter:
             env.update(gateway_env(self.base_url, os.environ.get(self.api_key_env, ""), req.model, self.small_model))
         elif self.api_key_env != API_KEY_VAR:
             env[API_KEY_VAR] = os.environ.get(self.api_key_env, "")
+        if self.isolate:
+            env.update(isolation_env(self._isolation_bin(), self.allow_hosts))
         return env
 
     async def run(self, req: RunRequest) -> AdapterResult:

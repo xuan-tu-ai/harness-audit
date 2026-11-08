@@ -299,4 +299,3 @@ def test_gateway_options_route_every_model_call_and_reprice(tmp_path: Path, monk
         assert missing == [] and cost == pytest.approx((1000 * 0.3 + 100 * 1.2 + 10000 * 0.0015) / 1e6)
     finally:
         PRICES.pop("gw-model")
-

@@ -11,6 +11,7 @@ adapter_options:
   base_url: https://tokenharbor.ai
   api_key_env: TOKENHARBOR_API_KEY   # the name of the variable, never the key
   sdk_max_budget_usd: 5.0            # the SDK's own cap, in its estimated dollars (it guesses prices for these models)
+  isolate: true                      # agent sees only its own workdir (hidden tests are otherwise readable via Bash)
 tasks_dir: tasks
 harness_a: harness_a
 harness_b: harness_b
