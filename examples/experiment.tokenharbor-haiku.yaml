@@ -1,0 +1,29 @@
+# Smoke test through an OpenAI-compatible gateway (Token Harbor). The agent is harness-audit's own
+# minimal tool loop (adapter `openai_compat`), not Claude Code.
+#
+# Before a real run:
+#   1. export TOKENHARBOR_API_KEY in the environment (never in this file).
+#   2. Confirm the model id from GET https://tokenharbor.ai/v1/models.
+#   3. Fill `pricing` with the provider's published prices (USD per million tokens). The gateway's own
+#      per-call cost is used when its responses report one; these prices drive the dry-run estimate.
+#   4. harness-audit run examples/experiment.tokenharbor.yaml --dry-run
+experiment: tokenharbor-smoke-haiku
+baseline: harness_a (pre-update state)
+round: 1
+model: claude-haiku-5.5          # id as listed by GET /v1/models
+adapter: openai_compat
+adapter_options:
+  base_url: https://tokenharbor.ai/v1
+  api_key_env: TOKENHARBOR_API_KEY   # the name of the variable, never the key
+tasks_dir: tasks
+harness_a: harness_a
+harness_b: harness_b
+seeds: 1
+aa: false
+splits: [report]
+per_run_max_usd: 0.03
+timeout_s: 600
+eval_timeout_s: 60
+pricing:   # published by GET https://tokenharbor.ai/v1/models on 2026-11-08 (USD per million tokens)
+  deepseek-v4.1-flash: {input: 0.30, output: 1.20, cache_read: 0.0015}
+  claude-haiku-5.5: {input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125}

@@ -10,7 +10,7 @@
 experiment: tokenharbor-smoke
 baseline: harness_a (pre-update state)
 round: 1
-model: deepseek-v4.1-flash       # confirm the exact id with /v1/models
+model: deepseek-v4.1-flash       # id as listed by GET /v1/models
 adapter: openai_compat
 adapter_options:
   base_url: https://tokenharbor.ai/v1
@@ -21,8 +21,9 @@ harness_b: harness_b
 seeds: 1
 aa: false
 splits: [report]
-per_run_max_usd: 0.05
+per_run_max_usd: 0.03
 timeout_s: 600
 eval_timeout_s: 60
-# pricing:
-#   deepseek-v4.1-flash: {input: <USD/MTok>, output: <USD/MTok>}
+pricing:   # published by GET https://tokenharbor.ai/v1/models on 2026-11-08 (USD per million tokens)
+  deepseek-v4.1-flash: {input: 0.30, output: 1.20, cache_read: 0.0015}
+  claude-haiku-5.5: {input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125}
