@@ -287,6 +287,11 @@ class Runner:
                 finally:
                     async with lock:
                         reserved -= cap
+                if rec is None:  # the model endpoint failed: not a result, not cached, rerun next time
+                    async with lock:
+                        self.skipped.append(j.run_id)
+                    progress(f"{j.run_id}: model endpoint error; not recorded (rerun to retry)")
+                    return
                 cost = rec.usage.cost_usd if rec.usage and rec.usage.cost_usd is not None else cap
                 async with lock:
                     self.spent_usd += cost
@@ -299,7 +304,9 @@ class Runner:
 
         await asyncio.gather(*(one(j) for j in todo))
         if self.skipped:
-            progress(f"budget: {len(self.skipped)} job(s) not run; audit uses the {len(records)} completed runs")
+            progress(
+                f"{len(self.skipped)} job(s) not run (budget or endpoint errors); audit uses the {len(records)} completed runs"
+            )
         return [records[j.run_id] for j in jobs if j.run_id in records]
 
     def _workdir(self) -> Path:
@@ -308,7 +315,7 @@ class Runner:
             base.mkdir(parents=True, exist_ok=True)
         return Path(tempfile.mkdtemp(prefix="harness-audit-run-", dir=base))
 
-    async def _run_job(self, j: Job, budget: float) -> RunRecord:
+    async def _run_job(self, j: Job, budget: float) -> RunRecord | None:
         c = self.exp.config
         work = self._workdir()
         eh_before = evaluator_hash(j.task)
@@ -321,6 +328,8 @@ class Runner:
                 raise
             except Exception as e:  # noqa: BLE001 - one broken run must not lose the others
                 res = AdapterResult(status="error", error=f"{type(e).__name__}: {str(e)[:300]}")
+            if res.status == "api_error":
+                return None
             eh_after = evaluator_hash(j.task)  # before scoring: did the agent's run touch the scorer?
             for p in self.adapter.installed_paths():
                 shutil.rmtree(work / p, ignore_errors=True)

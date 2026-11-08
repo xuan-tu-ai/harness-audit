@@ -50,6 +50,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -67,6 +68,8 @@ SUMMARY_MAX = 160
 SKILLS_DIR = Path(".claude") / "skills"
 API_KEY_VAR = "ANTHROPIC_API_KEY"
 SCRUB_PREFIXES = ("CLAUDE_", "ANTHROPIC_")
+SYNTHETIC = "<synthetic>"  # model id of messages the CLI writes itself (e.g. an API error), not a model
+FATAL_API = re.compile(r"API Error: (401|402|403)\b")
 ISOLATE_SCRIPT = Path(__file__).with_name("isolate.sh")
 HIDDEN_DIRS = ("/home", "/root", "/tmp", "/var/tmp")
 CA_VARS = ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
@@ -292,7 +295,7 @@ class TraceRecorder:
             self._message_ids.add(message_id)
         else:
             self._anonymous_messages += 1
-        if model and parent_tool_use_id is None and model not in self.main_models:
+        if model and model != SYNTHETIC and parent_tool_use_id is None and model not in self.main_models:
             self.main_models.append(model)
 
     @property
@@ -531,6 +534,10 @@ class ClaudeAgentSDKAdapter:
             raise
         except Exception as e:  # noqa: BLE001 - recorded as a failed run, never re-raised into the runner
             status, error = "error", f"{type(e).__name__}: {str(e)[:300]}"
+            if FATAL_API.search(str(e)):
+                raise FatalAdapterError(f"the model endpoint refused the run: {str(e)[:300]}") from e
+            if "API Error" in str(e):
+                status = "api_error"
         finally:
             shutil.rmtree(config_dir, ignore_errors=True)
         wall = time.monotonic() - t0
@@ -545,7 +552,13 @@ class ClaudeAgentSDKAdapter:
             if status == "ok":
                 status = status_of(result)
                 if status == "error":
-                    error = "; ".join(getattr(result, "errors", None) or []) or getattr(result, "subtype", "error")
+                    text = str(getattr(result, "result", None) or "")
+                    error = "; ".join(getattr(result, "errors", None) or []) or text[:300] or getattr(result, "subtype", "error")
+                    if FATAL_API.search(text):
+                        # Credentials or quota: every later run would fail the same way.
+                        raise FatalAdapterError(f"the model endpoint refused the run: {text[:300]}")
+                    if text.startswith("API Error"):
+                        status = "api_error"  # the endpoint failed; the run says nothing about the harness
         else:
             usage = Usage(tool_calls=rec.tool_calls, wall_s=round(wall, 3), model_calls=rec.model_calls, attempts=1)
         if rec.external_skills:

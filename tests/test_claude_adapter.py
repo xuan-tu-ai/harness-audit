@@ -308,3 +308,36 @@ def test_polyglot_experiments_load() -> None:
         exp = load_experiment(EXAMPLES / "polyglot" / f"experiment.{m}.yaml")
         assert exp.config.adapter == "claude_agent_sdk" and exp.config.adapter_options["api_key_env"] == "TOKENHARBOR_API_KEY"
         assert exp.harness_b.skills == ["spec-to-tests"] and exp.harness_a.config.use_claude_code_preset
+
+
+@pytest.mark.parametrize(
+    ("text", "expect"),
+    [("API Error: 402 Your Pass allowance for this period is used up", "fatal"), ("API Error: 529 Overloaded", "api_error")],
+)
+def test_endpoint_errors_are_not_scored_as_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str, expect: str) -> None:
+    """Seen in a real run: a gateway quota ran out mid-experiment and every later run 'failed' in one turn."""
+    from harness_audit.adapters import FatalAdapterError
+
+    req = _req(tmp_path)
+
+    async def q(*, prompt, options):
+        yield sdk.AssistantMessage(content=[sdk.TextBlock(text=text)], model="<synthetic>")
+        yield sdk.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=True,
+            num_turns=1,
+            session_id="s",
+            total_cost_usd=0.0,
+            usage={},
+            result=text,
+        )
+
+    monkeypatch.setattr(sdk, "query", q)
+    if expect == "fatal":
+        with pytest.raises(FatalAdapterError, match="402"):
+            asyncio.run(mod.ClaudeAgentSDKAdapter().run(req))
+    else:
+        res = asyncio.run(mod.ClaudeAgentSDKAdapter().run(req))
+        assert res.status == "api_error" and "529" in (res.error or "") and res.model_versions is None

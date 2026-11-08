@@ -239,3 +239,25 @@ def test_runner_records_model_and_runtime(exp_dir: Path, tmp_path: Path) -> None
     res = run_audit(recs, r.manifest())
     assert res.check("model_record").status.value == "pass"
     assert res.check("search_cost").status.value == "note"  # the example declares none
+
+
+def test_endpoint_errors_are_neither_recorded_nor_cached(tmp_path: Path) -> None:
+    from harness_audit.adapters.base import AdapterResult
+    from harness_audit.runner import Runner, load_experiment
+
+    exp = load_experiment(EXAMPLES / "experiment.yaml", seeds=1, aa=False)
+
+    class Down:
+        id = "down/1"
+
+        def installed_paths(self) -> list[str]:
+            return []
+
+        async def run(self, req):  # type: ignore[no-untyped-def]
+            return AdapterResult(status="api_error", error="API Error: 529")
+
+    r = Runner(exp, cache_dir=tmp_path / "c")
+    r._adapter = Down()
+    jobs = r.plan()[:2]
+    assert r.execute(jobs, 5.0) == [] and len(r.skipped) == 2
+    assert not list((tmp_path / "c").rglob("record.json"))
