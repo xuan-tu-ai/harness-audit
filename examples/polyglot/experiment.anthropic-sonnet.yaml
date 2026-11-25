@@ -1,0 +1,26 @@
+# Does the spec-to-tests skill help Claude Code on hard exercises? Model: claude-sonnet-5-5 on the Anthropic API.
+# Same tasks and harnesses as experiment.deepseek.yaml / experiment.haiku.yaml (Token Harbor); see
+# tasks/README.md for how the report split was chosen. The agent is Claude Code (claude_agent_sdk
+# adapter), isolated from the hidden tests and from every host except api.anthropic.com.
+#
+# The key is read from the environment variable named by api_key_env (never this file) and handed to the
+# CLI as ANTHROPIC_API_KEY. Run, with a hard spending cap:
+#   harness-audit run examples/polyglot/experiment.anthropic-sonnet.yaml --dry-run
+#   harness-audit run examples/polyglot/experiment.anthropic-sonnet.yaml --max-cost <USD> -j 3 -o out/anthropic-sonnet
+experiment: polyglot-spec-to-tests-anthropic-sonnet
+baseline: harness_a (Claude Code, no skill)
+round: 1
+model: claude-sonnet-5-5
+adapter: claude_agent_sdk
+adapter_options:
+  api_key_env: CLAUDE_API_KEY   # the name of the variable, never the key
+  isolate: true                 # agent sees only its own workdir; network only to api.anthropic.com
+tasks_dir: tasks
+harness_a: harness_a
+harness_b: harness_b
+seeds: 2
+aa: false
+splits: [report]
+per_run_max_usd: 1.50   # the SDK's per-run cap and the --max-cost reservation (Anthropic list prices)
+timeout_s: 900
+eval_timeout_s: 120

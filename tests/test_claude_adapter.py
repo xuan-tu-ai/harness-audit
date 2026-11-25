@@ -308,6 +308,10 @@ def test_polyglot_experiments_load() -> None:
         exp = load_experiment(EXAMPLES / "polyglot" / f"experiment.{m}.yaml")
         assert exp.config.adapter == "claude_agent_sdk" and exp.config.adapter_options["api_key_env"] == "TOKENHARBOR_API_KEY"
         assert exp.harness_b.skills == ["spec-to-tests"] and exp.harness_a.config.use_claude_code_preset
+    for m in ("anthropic-haiku", "anthropic-sonnet"):
+        exp = load_experiment(EXAMPLES / "polyglot" / f"experiment.{m}.yaml")
+        a = mod.ClaudeAgentSDKAdapter(**exp.config.adapter_options)
+        assert a.api_key_env == "CLAUDE_API_KEY" and a.isolate and a.allow_hosts == ["api.anthropic.com"] and a.base_url is None
 
 
 @pytest.mark.parametrize(
